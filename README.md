@@ -45,12 +45,12 @@ curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh
 cargo install ai-summary
 
 # Or build from source
-git clone https://github.com/sunoj/ai-summary.git
+git clone https://github.com/agent-tools-org/ai-summary.git
 cd ai-summary
 cargo install --path .
 ```
 
-Pre-built binaries for macOS (Apple Silicon / Intel) and Linux are available on [GitHub Releases](https://github.com/sunoj/ai-summary/releases).
+Pre-built binaries for macOS (Apple Silicon / Intel) and Linux are available on [GitHub Releases](https://github.com/agent-tools-org/ai-summary/releases).
 
 Requirements: a summarization backend (opencode CLI recommended — free). Rust 1.70+ if building from source.
 

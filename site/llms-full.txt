@@ -14,7 +14,7 @@ curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh
 cargo install ai-summary
 ```
 
-Pre-built binaries for macOS (Apple Silicon / Intel) and Linux: https://github.com/sunoj/ai-summary/releases
+Pre-built binaries for macOS (Apple Silicon / Intel) and Linux: https://github.com/agent-tools-org/ai-summary/releases
 
 ## Subcommands
 
@@ -173,5 +173,5 @@ Cumulative (166 queries): 300,700 tokens saved, 84% overall compression, 5x ROI.
 ## About
 - **Author:** sunoj
 - **License:** MIT
-- **GitHub:** https://github.com/sunoj/ai-summary
+- **GitHub:** https://github.com/agent-tools-org/ai-summary
 - **Website:** https://ai-summary.agent-tools.org

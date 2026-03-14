@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh
 set -e
 
-REPO="sunoj/ai-summary"
+REPO="agent-tools-org/ai-summary"
 INSTALL_DIR="${AI_SUMMARY_INSTALL_DIR:-$HOME/.local/bin}"
 
 main() {
