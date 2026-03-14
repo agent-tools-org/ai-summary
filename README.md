@@ -38,19 +38,21 @@ Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused
 ## Installation
 
 ```bash
-# From crates.io
+# Quick install (recommended) — downloads prebuilt binary
+curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh
+
+# Or from crates.io
 cargo install ai-summary
 
 # Or build from source
 git clone https://github.com/sunoj/ai-summary.git
 cd ai-summary
-cargo build --release
-cp target/release/ai-summary ~/.local/bin/
+cargo install --path .
 ```
 
 Pre-built binaries for macOS (Apple Silicon / Intel) and Linux are available on [GitHub Releases](https://github.com/sunoj/ai-summary/releases).
 
-Requirements: Rust 1.70+, a summarization backend (opencode CLI recommended — free).
+Requirements: a summarization backend (opencode CLI recommended — free). Rust 1.70+ if building from source.
 
 ## Quick Start
 

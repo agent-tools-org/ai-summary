@@ -31,7 +31,7 @@
   <main>
     <section id="hero">
       <p>Reduces token consumption by compressing web content through local LLMs before feeding it to Claude Code.</p>
-      <pre class="install"><code>cargo install ai-summary</code></pre>
+      <pre class="install"><code>curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh</code></pre>
     </section>
 
     <section id="how-it-works">
@@ -203,6 +203,9 @@ With hook:    cargo test → 15 tokens (compressed)</code></pre>
 
     <section id="installation">
       <h2>Installation</h2>
+      <h3>Quick install (recommended)</h3>
+      <pre><code class="language-bash">curl -fsSL https://ai-summary.agent-tools.org/install.sh | sh</code></pre>
+      <p>Downloads prebuilt binary for your platform (macOS/Linux, x86_64/aarch64). Set <code>AI_SUMMARY_INSTALL_DIR</code> to customize install path (default: <code>~/.local/bin</code>).</p>
       <h3>From crates.io</h3>
       <pre><code class="language-bash">cargo install ai-summary</code></pre>
       <h3>From source</h3>
