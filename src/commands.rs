@@ -344,14 +344,13 @@ pub fn run_github(
 ) {
     let t0 = Instant::now();
 
-    if Command::new("gh")
+    if !Command::new("gh")
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-        == false
     {
         eprintln!("[ai-summary] gh CLI not found. Install: https://cli.github.com");
         std::process::exit(1);

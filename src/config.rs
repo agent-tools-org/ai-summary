@@ -7,6 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::Cli;
+#[cfg(test)]
+use crate::Commands;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -358,7 +360,7 @@ jina_api_key = ""
             ];
 
             let cli = Cli {
-                command: None,
+                command: Commands::Stats,
                 deep: true,
                 raw: false,
                 cf: false,
@@ -367,7 +369,6 @@ jina_api_key = ""
                 api_key: None,
                 model: Some("cli-model".to_string()),
                 json: false,
-                query: vec![],
             };
             let cfg = resolve_config(&cli);
             assert_eq!(cfg.api_url, "https://cli.url");

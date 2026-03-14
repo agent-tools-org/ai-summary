@@ -37,15 +37,16 @@ use crate::init::run_init;
     version,
     about = "Web search & summarization with local LLM. Save tokens, search smarter.",
     long_about = "Search the web, fetch pages, or pipe text — summarize with a local LLM.\n\n\
-        Three modes:\n  \
-        1. ai-summary <query>           Search + fetch + summarize\n  \
-        2. ai-summary fetch <urls>      Fetch URLs + summarize\n  \
-        3. echo text | ai-summary sum   Summarize stdin text\n\n\
+        Examples:\n  \
+        ai-summary what is Rust              Search + summarize\n  \
+        ai-summary fetch <urls> -p <q>       Fetch URLs + summarize\n  \
+        echo text | ai-summary sum <prompt>  Summarize stdin\n  \
+        ai-summary github owner/repo -p <q>  Read GitHub code\n\n\
         Designed for Claude Code and AI coding agents to reduce token consumption."
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Commands,
     #[arg(long, global = true)]
     pub deep: bool,
     #[arg(long, global = true)]
@@ -62,11 +63,15 @@ pub struct Cli {
     pub model: Option<String>,
     #[arg(long, global = true)]
     pub json: bool,
-    pub query: Vec<String>,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Search the web and summarize results
+    #[command(visible_alias = "s")]
+    Search {
+        query: Vec<String>,
+    },
     #[command(visible_alias = "sum")]
     Summarize {
         prompt: Vec<String>,
@@ -103,9 +108,9 @@ pub enum Commands {
         depth: u32,
     },
     /// Search GitHub code or read files from repos via gh CLI.
-    #[command(visible_alias = "gh")]
     Github {
         /// Search query, or owner/repo[/path]
+        #[arg(num_args = 1..)]
         args: Vec<String>,
         /// Restrict search to a specific repo (owner/repo)
         #[arg(short, long)]
@@ -138,7 +143,26 @@ pub enum Commands {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    // Try clap parse first; if it fails and args look like a search query, handle it
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // If user passed bare words (no subcommand), treat as search
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if !args.is_empty() && !args[0].starts_with('-') && e.kind() == clap::error::ErrorKind::InvalidSubcommand {
+                // Re-parse as "search <args>"
+                let mut new_args = vec!["ai-summary".to_string(), "search".to_string()];
+                new_args.extend(args);
+                match Cli::try_parse_from(new_args) {
+                    Ok(cli) => cli,
+                    Err(_) => e.exit(),
+                }
+            } else {
+                e.exit();
+            }
+        }
+    };
+
     let cfg = resolve_config(&cli);
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -146,40 +170,41 @@ fn main() {
         .expect("HTTP client");
 
     match &cli.command {
-        Some(Commands::Stats) => {
+        Commands::Search { query } => {
+            let q = query.join(" ");
+            if q.is_empty() {
+                eprintln!("Usage: ai-summary <query>");
+                std::process::exit(1);
+            }
+            run_search(&cli, &cfg, &client, &q);
+        }
+        Commands::Stats => {
             if cli.json {
                 print_stats_json();
             } else {
                 print_stats();
             }
-            return;
         }
-        Some(Commands::ResetStats) => {
+        Commands::ResetStats => {
             let _ = fs::remove_file(stats_path());
             println!("Statistics reset.");
-            return;
         }
-        Some(Commands::Config) => {
+        Commands::Config => {
             print_config();
-            return;
         }
-        Some(Commands::Init { uninstall, with_repomix }) => {
+        Commands::Init { uninstall, with_repomix } => {
             run_init(*uninstall, *with_repomix);
-            return;
         }
-        Some(Commands::Wrap { command }) => {
+        Commands::Wrap { command } => {
             run_wrap(command);
-            // run_wrap calls process::exit — never returns
         }
-        Some(Commands::Compress { max_chars, source }) => {
+        Commands::Compress { max_chars, source } => {
             run_compress(*max_chars, source.as_deref());
-            return;
         }
-        Some(Commands::Summarize { prompt }) => {
+        Commands::Summarize { prompt } => {
             run_summarize(&cli, &cfg, &client, &prompt.join(" "));
-            return;
         }
-        Some(Commands::Fetch { urls, prompt }) => {
+        Commands::Fetch { urls, prompt } => {
             let urls = if urls.is_empty() && !atty::is(atty::Stream::Stdin) {
                 let mut input = String::new();
                 if let Err(e) = std::io::stdin().read_to_string(&mut input) {
@@ -199,58 +224,32 @@ fn main() {
                 std::process::exit(1);
             }
             run_fetch(&cli, &cfg, &client, &urls, prompt);
-            return;
         }
-        Some(Commands::Bench) => {
+        Commands::Bench => {
             run_bench(&cfg, &client);
-            return;
         }
-        Some(Commands::Crawl {
+        Commands::Crawl {
             url,
             prompt,
             limit,
             depth,
-        }) => {
+        } => {
             run_crawl(&cli, &cfg, &client, url, prompt, *limit, *depth);
-            return;
         }
-        Some(Commands::Github {
+        Commands::Github {
             args,
             repo,
             language,
             prompt,
-        }) => {
+        } => {
             run_github(&cli, &cfg, &client, args, repo, language, prompt);
-            return;
         }
-        Some(Commands::Repo {
+        Commands::Repo {
             repo,
             prompt,
             include,
-        }) => {
+        } => {
             run_repo(&cli, &cfg, &client, repo, prompt, include.as_deref());
-            return;
         }
-        None => {}
     }
-
-    let query = cli.query.join(" ");
-    if query.is_empty() {
-        eprintln!("ai-summary - Web search & summarization with local LLM\n");
-        eprintln!("Usage:");
-        eprintln!("  ai-summary <query>                      Search + summarize");
-        eprintln!("  ai-summary fetch <url1> <url2> -p <q>   Fetch URLs + summarize");
-        eprintln!("  echo text | ai-summary sum <prompt>      Summarize stdin");
-        eprintln!(
-            "  ai-summary crawl <url> -p <q>            Crawl website (CF Browser Rendering)"
-        );
-        eprintln!("  ai-summary github <query> [-r repo]      Search GitHub code");
-        eprintln!("  ai-summary github owner/repo [path]      Read file from repo");
-        eprintln!("  ai-summary stats                        Show token savings");
-        eprintln!("  ai-summary config                       Show/create config");
-        eprintln!("\nFlags: --deep --raw --cf --browser --api-url --api-key --model");
-        std::process::exit(1);
-    }
-
-    run_search(&cli, &cfg, &client, &query);
 }

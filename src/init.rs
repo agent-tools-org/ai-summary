@@ -207,9 +207,9 @@ fn install_hooks(settings_path: &Path) -> InitResult<()> {
         let path = write_hook_script_file(filename, content)?;
         let command = path.display().to_string();
         let already_exists = pre_array.iter().any(|entry| {
-            entry.get("hooks").and_then(Value::as_array).map_or(false, |h| {
+            entry.get("hooks").and_then(Value::as_array).is_some_and(|h| {
                 h.iter().any(|hook| {
-                    hook.get("command").and_then(Value::as_str).map_or(false, |c| c.contains(filename))
+                    hook.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(filename))
                 })
             })
         });
@@ -305,12 +305,12 @@ fn hook_entry_matches(entry: &Value) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
-        .map_or(false, |hooks| {
+        .is_some_and(|hooks| {
             hooks.iter().any(|hook| {
                 hook.as_object()
                     .and_then(|obj| obj.get("command"))
                     .and_then(Value::as_str)
-                    .map_or(false, |cmd| cmd.contains("ai-summary"))
+                    .is_some_and(|cmd| cmd.contains("ai-summary"))
             })
         })
 }

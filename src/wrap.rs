@@ -97,26 +97,20 @@ fn summarize_test_output(output: &str) -> Option<String> {
             // Parse "N passed" patterns
             let parts: Vec<&str> = line.split_whitespace().collect();
             for (i, part) in parts.iter().enumerate() {
-                if *part == "passed" || part.starts_with("passed") {
-                    if i > 0 {
-                        if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
-                            total_passed += n;
-                            found_results = true;
-                        }
+                if (*part == "passed" || part.starts_with("passed")) && i > 0 {
+                    if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
+                        total_passed += n;
+                        found_results = true;
                     }
                 }
-                if *part == "failed" || part.starts_with("failed") {
-                    if i > 0 {
-                        if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
-                            total_failed += n;
-                        }
+                if (*part == "failed" || part.starts_with("failed")) && i > 0 {
+                    if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
+                        total_failed += n;
                     }
                 }
-                if *part == "ignored" || part.starts_with("ignored") {
-                    if i > 0 {
-                        if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
-                            total_ignored += n;
-                        }
+                if (*part == "ignored" || part.starts_with("ignored")) && i > 0 {
+                    if let Ok(n) = parts[i - 1].trim_end_matches(';').parse::<u64>() {
+                        total_ignored += n;
                     }
                 }
             }

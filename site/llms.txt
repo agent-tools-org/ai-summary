@@ -6,9 +6,9 @@ ai-summary is designed to help AI agents (like Claude Code, Cursor, or GPT-4) ef
 
 ## Documentation
 - [Full Documentation](https://ai-summary.agent-tools.org/llms-full.txt): Complete guide to installation, all subcommands, configuration, hooks, and examples.
-- [GitHub Repository](https://github.com/sunoj/ai-summary): Access the source code, report issues, and contribute to the project.
+- [GitHub Repository](https://github.com/agent-tools-org/ai-summary): Access the source code, report issues, and contribute to the project.
 - [Website](https://ai-summary.agent-tools.org): Official project home page.
 
 ## Optional
-- [License](https://github.com/sunoj/ai-summary/blob/main/LICENSE): MIT License information.
+- [License](https://github.com/agent-tools-org/ai-summary/blob/main/LICENSE): MIT License information.
 - [Author](https://github.com/sunoj): Profile of the author, sunoj.
