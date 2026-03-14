@@ -1,0 +1,173 @@
+# ai-summary Full Documentation
+
+> CLI tool that compresses web content for AI coding agents. Reduces token consumption by 60-98%.
+
+ai-summary replaces 3-5 Claude Code tool calls (WebSearch + multiple WebFetch) with one CLI command that returns a focused summary. 1 call = ~268 tokens vs 5,000-50,000 tokens raw.
+
+## Installation
+
+```bash
+cargo install ai-summary
+```
+
+Or download pre-built binaries from GitHub Releases: https://github.com/sunoj/ai-summary/releases
+
+## Subcommands
+
+### Search + Summarize (default)
+```bash
+ai-summary "what is the latest Rust version"
+ai-summary "React 19 new features" --deep
+```
+
+### Fetch + Summarize
+```bash
+ai-summary fetch https://example.com/article -p "key points"
+ai-summary fetch https://docs.rs/reqwest --json
+cat urls.txt | ai-summary fetch -p "summarize each"
+```
+
+### Stdin Summarize
+```bash
+echo "large text content" | ai-summary sum "extract key findings"
+```
+
+### Fast Compress (no LLM)
+```bash
+cat large_log.txt | ai-summary compress -m 4000
+```
+
+### Wrap (test output compression)
+```bash
+ai-summary wrap cargo test
+ai-summary wrap npm test
+```
+
+### GitHub Code (search + read via gh CLI)
+```bash
+ai-summary github "error handling" -r tokio-rs/tokio -l rust
+ai-summary github "query" -l typescript         # Search across all repos
+ai-summary github owner/repo src/main.rs -p "explain this"  # Read file
+ai-summary github owner/repo src/                # Browse directory
+ai-summary --raw github owner/repo path/to/file  # Raw file content
+```
+
+### Repo (remote GitHub repository)
+```bash
+ai-summary repo user/repo -p "explain the architecture"
+ai-summary repo user/repo --include "src/**/*.rs" -p "key modules"
+ai-summary repo user/repo --raw  # Output raw repomix content
+```
+
+### Crawl (Cloudflare Browser Rendering)
+```bash
+ai-summary crawl https://docs.example.com -p "API reference" --limit 10 --depth 2
+```
+
+### Stats
+```bash
+ai-summary stats
+ai-summary stats --json
+ai-summary reset-stats
+```
+
+### Init (Claude Code setup)
+```bash
+ai-summary init                # Install prompt + hook
+ai-summary init --with-repomix # Also install repomix (for repo command)
+ai-summary init --uninstall    # Remove
+```
+
+### Config
+```bash
+ai-summary config
+```
+
+## Flags
+
+- `--deep` — Fetch more pages (5 instead of 3)
+- `--raw` — Skip summarization, return raw content
+- `--json` — Structured JSON output for scripting
+- `--browser` — Use agent-browser for JS-heavy pages
+- `--cf` — Use Cloudflare Browser Rendering
+- `--api-url` — Override LLM API endpoint
+- `--api-key` — Override API key
+- `--model` — Override model name
+
+## Configuration
+
+Config file: `~/.ai-summary/config.toml` (auto-created with `ai-summary config`)
+
+### LLM Backends
+- **opencode** (free) — Community inference, auto-detected
+- **oMLX** (local) — Apple Silicon local inference via MLX
+- **OpenAI-compatible** — Any endpoint: OpenAI, Groq, DeepSeek, etc.
+
+### Search Backends (priority order)
+1. **Gemini CLI** — Uses locally installed `gemini` CLI with Google Search grounding
+2. **Gemini API** — Direct API call (requires GEMINI_API_KEY)
+3. **DuckDuckGo** — Free, no API key needed
+4. **Brave Search** — Requires BRAVE_API_KEY
+
+### Fetch Backends (fallback order)
+1. **HTTP fetch** — Direct reqwest with readability extraction
+2. **Jina Reader** — r.jina.ai fallback for failed fetches (requires JINA_API_KEY)
+3. **agent-browser** — Headless browser for JS-heavy pages
+4. **Cloudflare Browser Rendering** — Cloud-based rendering (requires CF credentials)
+
+## Claude Code Integration
+
+### One-command setup
+```bash
+ai-summary init            # Install prompt injection + PreToolUse hook
+ai-summary init --uninstall  # Remove everything
+```
+
+Installs three things:
+1. **Prompt injection** into `~/.claude/CLAUDE.md` — Claude and all subagents use `ai-summary` instead of built-in WebSearch/WebFetch
+2. **Bash hook** — rewrites test commands to run through `ai-summary wrap`
+3. **WebFetch/WebSearch hooks** — on first use per session, denies and reminds Claude to use `ai-summary`; subsequent calls pass through silently
+
+Supported test commands: cargo test, cargo nextest, npm test, npx vitest, npx jest, yarn test, pytest, go test, mix test, dotnet test, make test. Commands with pipes or redirections are skipped.
+
+### Tee mode
+When a wrapped command fails, full raw output is saved to `/tmp/ai-summary-tee/` so the AI can read it if the summary isn't enough. Auto-cleanup keeps only the 20 most recent tee files.
+
+Requires `jq` and `ai-summary` in PATH.
+
+## Environment Variables
+
+- `GEMINI_API_KEY` — Gemini API key
+- `BRAVE_API_KEY` — Brave Search API key
+- `JINA_API_KEY` — Jina Reader API key
+- `CF_ACCOUNT_ID` — Cloudflare account ID
+- `CF_API_TOKEN` — Cloudflare API token
+- `AI_SUMMARY_API_URL` — Override LLM API URL
+- `AI_SUMMARY_API_KEY` — Override API key
+- `AI_SUMMARY_MODEL` — Override model name
+
+## Benchmarks (v2.6.0)
+
+Real-world evaluation (2026-03-14), free LLM backends:
+
+| Scenario | Input | Output | Compression | Time |
+|---|---|---|---|---|
+| Repo (ai-summary, 15 .rs files) | 59.1K chars | 1.6K chars | 97% | 59s |
+| Repo (repomix, src/**/*.ts) | 182.3K chars | 1.7K chars | 99% | 36s |
+| Fetch (docs.rs/reqwest) | ~1K tokens | ~516 tokens | 51% | 10s |
+| Fetch (react.dev/learn) | ~1K tokens | ~308 tokens | 69% | 10s |
+| Fetch (Wikipedia/Rust) | ~1K tokens | ~378 tokens | 62% | 10s |
+
+Cumulative (166 queries): 300,700 tokens saved, 84% overall compression, 5x ROI.
+
+## Exit Codes
+
+- 0 — Success
+- 1 — User error (bad args, no input)
+- 2 — API/network error (no results, fetch failed)
+
+## About
+- **Author:** sunoj
+- **License:** MIT
+- **GitHub:** https://github.com/sunoj/ai-summary
+- **Website:** https://ai-summary.agent-tools.org

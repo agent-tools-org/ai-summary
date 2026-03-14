@@ -1,0 +1,21 @@
+User-agent: *
+Allow: /
+
+# Explicitly welcome AI agents
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Assistant
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /

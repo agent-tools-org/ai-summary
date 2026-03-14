@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ai-summary — Web search and summarization CLI for AI coding agents. Compresses web content via local LLMs to reduce token consumption for Claude Code.">
+  <meta name="keywords" content="ai-summary, CLI, summarization, web search, token compression, Claude Code, LLM, readability">
+  <title>ai-summary — Web search & summarization CLI for AI agents</title>
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="LLM-readable summary">
+  <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "ai-summary",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Cross-platform",
+    "description": "Web search and summarization CLI for AI coding agents. Reduces token consumption by compressing web content through local LLMs before feeding to Claude Code.",
+    "url": "https://github.com/sunoj/ai-summary",
+    "author": { "@type": "Person", "name": "sunoj" },
+    "license": "https://opensource.org/licenses/MIT"
+  }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>ai-summary</h1>
+    <p class="tagline">Web search & summarization CLI for AI coding agents</p>
+  </header>
+
+  <main>
+    <section id="hero">
+      <p>Reduces token consumption by compressing web content through local LLMs before feeding it to Claude Code.</p>
+      <pre class="install"><code>cargo install ai-summary</code></pre>
+    </section>
+
+    <section id="how-it-works">
+      <h2>How It Works</h2>
+      <p>Pipeline:</p>
+      <pre><code>Web Search → Fetch Pages → Readability Extract → LLM Summary → Compressed output (60–98% smaller)</code></pre>
+      <p>Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused 1–4K summary.</p>
+    </section>
+
+    <section id="features">
+      <h2>Features</h2>
+      <ul>
+        <li><strong>Search + Summarize</strong> — Gemini (Google Search grounding), DuckDuckGo, or Brave</li>
+        <li><strong>Fetch + Summarize</strong> — Fetch any URL, extract article content, summarize with LLM</li>
+        <li><strong>Stdin Summarize</strong> — Pipe any text through for compression</li>
+        <li><strong>Fast Compress</strong> — No-LLM text extraction for instant compression</li>
+        <li><strong>JS-heavy Pages</strong> — agent-browser and Cloudflare Browser Rendering</li>
+        <li><strong>Pipe-friendly</strong> — <code>cat urls.txt | ai-summary fetch</code>, <code>--json</code> output, standard exit codes</li>
+        <li><strong>GitHub Code Search</strong> — Search code and read files from GitHub repos via <code>gh</code> CLI + LLM summarization</li>
+        <li><strong>Repo Summarize</strong> — Pack remote GitHub repos with <a href="https://github.com/yamadashy/repomix">repomix</a> and summarize via LLM</li>
+        <li><strong>Test Output Compression</strong> — <code>wrap</code> subcommand compresses passing test output (cargo test, npm test, pytest, etc.)</li>
+        <li><strong>Claude Code Integration</strong> — Prompt injection for subagent coverage + PreToolUse hooks for real token savings</li>
+        <li><strong>Rich Statistics</strong> — Time-period breakdown, ROI tracking</li>
+        <li><strong>Multiple LLM Backends</strong> — opencode (free), oMLX (local), OpenAI, Groq, DeepSeek</li>
+      </ul>
+    </section>
+
+    <section id="quick-start">
+      <h2>Quick Start</h2>
+      <pre><code class="language-bash">ai-summary "what is the latest Rust version"</code></pre>
+      <pre><code class="language-bash">ai-summary fetch https://example.com/article -p "key points"</code></pre>
+      <pre><code class="language-bash">echo "large text" | ai-summary compress -m 4000</code></pre>
+      <pre><code class="language-bash">ai-summary github "error handling" -r tokio-rs/tokio -l rust</code></pre>
+      <pre><code class="language-bash">ai-summary github owner/repo src/main.rs -p "explain this"</code></pre>
+      <pre><code class="language-bash">ai-summary repo user/repo -p "explain the architecture"</code></pre>
+      <pre><code class="language-bash">ai-summary stats</code></pre>
+    </section>
+
+    <section id="subcommands">
+      <h2>Subcommands</h2>
+      <ul>
+        <li><code>ai-summary &lt;query&gt;</code> — Search + summarize</li>
+        <li><code>ai-summary fetch &lt;urls&gt; -p ...</code> — Fetch + summarize</li>
+        <li><code>ai-summary sum &lt;prompt&gt;</code> — Summarize stdin via LLM</li>
+        <li><code>ai-summary compress -m &lt;chars&gt;</code> — Fast compression (no LLM)</li>
+        <li><code>ai-summary wrap &lt;command&gt;</code> — Run command, compress passing test output</li>
+        <li><code>ai-summary github &lt;query&gt; [-r repo] [-l lang]</code> — Search GitHub code</li>
+        <li><code>ai-summary github &lt;owner/repo&gt; [path]</code> — Read file / browse repo</li>
+        <li><code>ai-summary repo &lt;owner/repo&gt; -p ...</code> — Pack remote repo + summarize</li>
+        <li><code>ai-summary crawl &lt;url&gt;</code> — Crawl via CF Browser Rendering</li>
+        <li><code>ai-summary stats</code> — Token savings stats</li>
+        <li><code>ai-summary init</code> — Install Claude Code integration</li>
+        <li><code>ai-summary config</code> — Show/create config</li>
+      </ul>
+      <p>Flags: <code>--deep</code>, <code>--raw</code>, <code>--json</code>, <code>--browser</code>, <code>--cf</code>, <code>--api-url</code>, <code>--api-key</code>, <code>--model</code></p>
+    </section>
+
+    <section id="claude-integration">
+      <h2>Claude Code Integration</h2>
+      <h3>One-command setup</h3>
+      <pre><code class="language-bash">ai-summary init                # Install prompt + hook
+ai-summary init --with-repomix # Also install repomix (for repo command)
+ai-summary init --uninstall    # Remove</code></pre>
+      <p>Installs prompt injection (Claude + subagents use ai-summary), Bash hook (test commands compressed), and WebFetch/WebSearch hooks (one-time education per session).</p>
+      <pre><code>Without hook: cargo test → 3000 tokens (raw)
+With hook:    cargo test → 15 tokens (compressed)</code></pre>
+      <h3>Tee mode</h3>
+      <p>Failed commands save full output to <code>/tmp/ai-summary-tee/</code> — AI can read the raw log if the summary isn't enough.</p>
+    </section>
+
+    <section id="benchmarks">
+      <h2>Benchmarks (v2.6.0)</h2>
+      <p>Real-world evaluation run on 2026-03-14. All tests use default config with free LLM backends.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Compression</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Repo (ai-summary, 15 .rs files)</td>
+            <td>59.1K chars</td>
+            <td>1.6K chars</td>
+            <td class="highlight">97%</td>
+            <td>59s</td>
+          </tr>
+          <tr>
+            <td>Repo (repomix, src/**/*.ts)</td>
+            <td>182.3K chars</td>
+            <td>1.7K chars</td>
+            <td class="highlight">99%</td>
+            <td>36s</td>
+          </tr>
+          <tr>
+            <td>Fetch (docs.rs/reqwest)</td>
+            <td>~1K tokens</td>
+            <td>~516 tokens</td>
+            <td class="highlight">51%</td>
+            <td>10s</td>
+          </tr>
+          <tr>
+            <td>Fetch (react.dev/learn)</td>
+            <td>~1K tokens</td>
+            <td>~308 tokens</td>
+            <td class="highlight">69%</td>
+            <td>10s</td>
+          </tr>
+          <tr>
+            <td>Fetch (Wikipedia/Rust)</td>
+            <td>~1K tokens</td>
+            <td>~378 tokens</td>
+            <td class="highlight">62%</td>
+            <td>10s</td>
+          </tr>
+          <tr>
+            <td>Fetch (Hacker News)</td>
+            <td>~938 tokens</td>
+            <td>~262 tokens</td>
+            <td class="highlight">72%</td>
+            <td>10s</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Cumulative Stats (166 queries)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Total tokens saved</td><td><strong>300,700</strong></td></tr>
+          <tr><td>Overall compression</td><td><strong>84%</strong></td></tr>
+          <tr><td>Estimated Claude cost saved</td><td>$0.90 (at $3/M input tokens)</td></tr>
+          <tr><td>LLM cost</td><td>$0.18 (mostly free backends)</td></tr>
+          <tr><td>ROI</td><td><strong>5x return</strong></td></tr>
+        </tbody>
+      </table>
+
+      <h3>By Mode</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Queries</th>
+            <th>Tokens Saved</th>
+            <th>Avg Compression</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>gemini-cli (search)</td><td>58</td><td>171,600</td><td>85%</td></tr>
+          <tr><td>repo (repomix)</td><td>2</td><td>59,500</td><td>99%</td></tr>
+          <tr><td>fetch (single URL)</td><td>93</td><td>48,700</td><td>76%</td></tr>
+          <tr><td>compress (no LLM)</td><td>4</td><td>10,100</td><td>83%</td></tr>
+          <tr><td>gemini API</td><td>2</td><td>6,100</td><td>88%</td></tr>
+          <tr><td>stdin pipe</td><td>5</td><td>1,700</td><td>71%</td></tr>
+          <tr><td>hook-bash (auto)</td><td>2</td><td>867</td><td>30%</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Repo mode achieves 97-99% compression using repomix Tree-sitter extraction + LLM summarization. Compress mode uses no LLM — pure text extraction at near-instant speed.</p>
+    </section>
+
+    <section id="installation">
+      <h2>Installation</h2>
+      <h3>From crates.io</h3>
+      <pre><code class="language-bash">cargo install ai-summary</code></pre>
+      <h3>From source</h3>
+      <pre><code class="language-bash">git clone https://github.com/sunoj/ai-summary
+cd ai-summary
+cargo install --path .</code></pre>
+      <p>Releases: <a href="https://github.com/sunoj/ai-summary/releases">GitHub Releases</a></p>
+    </section>
+  </main>
+
+  <footer>
+    <p><a href="https://github.com/sunoj/ai-summary">GitHub</a> · <a href="/llms.txt">llms.txt</a> — AI-readable summary of this site · MIT License · Author: sunoj</p>
+  </footer>
+</body>
+</html>
