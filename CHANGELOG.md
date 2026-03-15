@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.10.0 (2026-03-15)
+
+### Added
+- PDF document support — `ai-summary fetch <url>.pdf` extracts text via `pdf-extract` and summarizes
+- DOCX document support — `ai-summary fetch <url>.docx` extracts text from Word documents via ZIP/XML parsing
+- Content-type detection (`application/pdf`, `wordprocessingml.document`) with URL extension fallback
+- Binary document download limit: 10MB (vs 200KB for HTML)
+
 ## v2.6.0 (2026-03-14)
 
 ### Added

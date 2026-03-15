@@ -24,6 +24,7 @@ Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused
 
 - **Search + Summarize** — Gemini (Google Search grounding), DuckDuckGo, or Brave Search
 - **Fetch + Summarize** — Fetch any URL, extract article content via readability, summarize with LLM
+- **PDF & DOCX Support** — Fetch and summarize PDF papers and Word documents directly
 - **Stdin Summarize** — Pipe any text through for compression
 - **Fast Compress** — No-LLM text extraction for instant compression
 - **GitHub Code Search** — Search code and read files from GitHub repos via `gh` CLI + LLM summarization
@@ -67,6 +68,9 @@ ai-summary "what is the latest Rust version"
 
 # Fetch URLs and summarize
 ai-summary fetch https://example.com/article -p "what are the key points"
+
+# Fetch and summarize PDF/DOCX documents
+ai-summary fetch https://arxiv.org/pdf/1706.03762 -p "what is this paper about"
 
 # Fetch from stdin
 cat urls.txt | ai-summary fetch -p "summarize each"
