@@ -20,6 +20,8 @@ readability = { version = "0.3", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
 atty = "0.2"
+pdf-extract = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 assert_cmd = "2"

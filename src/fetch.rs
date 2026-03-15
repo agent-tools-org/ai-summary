@@ -43,6 +43,12 @@ fn fetch_page_inner(
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
+    if content_type.contains("application/pdf") || url.ends_with(".pdf") {
+        return fetch_binary_response(resp, url, max_chars, "pdf");
+    }
+    if content_type.contains("wordprocessingml.document") || url.ends_with(".docx") {
+        return fetch_binary_response(resp, url, max_chars, "docx");
+    }
     if !content_type.contains("text/html") && !content_type.contains("text/plain") {
         eprintln!("[ai-summary] Skipping {url}: content-type {content_type}");
         return None;
@@ -67,6 +73,76 @@ fn fetch_page_inner(
         url: url.to_string(),
         text: truncate_text(text, max_chars),
     })
+}
+fn fetch_binary_response(
+    resp: reqwest::blocking::Response,
+    url: &str,
+    max_chars: usize,
+    format: &str,
+) -> Option<FetchedPage> {
+    let mut bytes = Vec::new();
+    resp.take(10_000_000).read_to_end(&mut bytes).ok()?;
+    let text = match format {
+        "pdf" => match pdf_extract::extract_text_from_mem(&bytes) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[ai-summary] PDF extraction failed for {url}: {e}");
+                return None;
+            }
+        },
+        "docx" => match extract_docx_text(&bytes) {
+            Some(t) => t,
+            None => {
+                eprintln!("[ai-summary] DOCX extraction failed for {url}");
+                return None;
+            }
+        },
+        _ => return None,
+    };
+    let text = collapse_ws(text.trim());
+    if text.len() < 50 {
+        eprintln!(
+            "[ai-summary] Skipping {url}: {format} content too short ({} chars)",
+            text.len()
+        );
+        return None;
+    }
+    Some(FetchedPage {
+        url: url.to_string(),
+        text: truncate_text(text, max_chars),
+    })
+}
+fn extract_docx_text(bytes: &[u8]) -> Option<String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+    let mut xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .ok()?
+        .read_to_string(&mut xml)
+        .ok()?;
+    // Strip XML tags, keeping only text content (w:t elements etc.)
+    let mut out = String::with_capacity(xml.len() / 4);
+    let mut in_tag = false;
+    let mut last_tag = String::new();
+    for ch in xml.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                last_tag.clear();
+            }
+            '>' => {
+                in_tag = false;
+                // Add paragraph/line breaks at closing paragraph tags
+                if last_tag.starts_with("/w:p") {
+                    out.push('\n');
+                }
+            }
+            _ if in_tag => last_tag.push(ch),
+            _ => out.push(ch),
+        }
+    }
+    Some(out)
 }
 pub fn fetch_page_cf(
     client: &Client,
