@@ -37,7 +37,7 @@
     <section id="how-it-works">
       <h2>How It Works</h2>
       <p>Pipeline:</p>
-      <pre><code>Web Search → Fetch Pages → Readability Extract → LLM Summary → Compressed output (60–98% smaller)</code></pre>
+      <pre><code>Web Search → Fetch Pages → Readability Extract → Cache (1h TTL) → LLM Summary → Compressed output (60–98% smaller)</code></pre>
       <p>Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused 1–4K summary.</p>
     </section>
 
@@ -54,6 +54,8 @@
         <li><strong>Repo Summarize</strong> — Pack remote GitHub repos with <a href="https://github.com/yamadashy/repomix">repomix</a> and summarize via LLM</li>
         <li><strong>Test Output Compression</strong> — <code>wrap</code> subcommand compresses passing test output (cargo test, npm test, pytest, etc.)</li>
         <li><strong>Claude Code Integration</strong> — Prompt injection for subagent coverage + PreToolUse hooks for real token savings</li>
+        <li><strong>Summary Cache</strong> — 1-hour TTL, SHA256-keyed; <code>--no-cache</code> to bypass</li>
+        <li><strong>Structured Metadata</strong> — <code>--metadata</code> adds source URLs, timestamps, cache status to JSON</li>
         <li><strong>Rich Statistics</strong> — Time-period breakdown, ROI tracking</li>
         <li><strong>Multiple LLM Backends</strong> — opencode (free), oMLX (local), OpenAI, Groq, DeepSeek</li>
       </ul>
@@ -83,10 +85,11 @@
         <li><code>ai-summary repo &lt;owner/repo&gt; -p ...</code> — Pack remote repo + summarize</li>
         <li><code>ai-summary crawl &lt;url&gt;</code> — Crawl via CF Browser Rendering</li>
         <li><code>ai-summary stats</code> — Token savings stats</li>
+        <li><code>ai-summary reset-cache</code> — Clear summary cache</li>
         <li><code>ai-summary init</code> — Install Claude Code integration</li>
         <li><code>ai-summary config</code> — Show/create config</li>
       </ul>
-      <p>Flags: <code>--deep</code>, <code>--raw</code>, <code>--json</code>, <code>--browser</code>, <code>--cf</code>, <code>--api-url</code>, <code>--api-key</code>, <code>--model</code></p>
+      <p>Flags: <code>--deep</code>, <code>--raw</code>, <code>--json</code>, <code>--metadata</code>, <code>--no-cache</code>, <code>--doc</code>, <code>--browser</code>, <code>--cf</code>, <code>--api-url</code>, <code>--api-key</code>, <code>--model</code></p>
     </section>
 
     <section id="claude-integration">
@@ -103,7 +106,7 @@ With hook:    cargo test → 15 tokens (compressed)</code></pre>
     </section>
 
     <section id="benchmarks">
-      <h2>Benchmarks (v2.6.0)</h2>
+      <h2>Benchmarks (v2.8.0)</h2>
       <p>Real-world evaluation run on 2026-03-14. All tests use default config with free LLM backends.</p>
       <table>
         <thead>

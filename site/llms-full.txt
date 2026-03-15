@@ -68,11 +68,12 @@ ai-summary repo user/repo --raw  # Output raw repomix content
 ai-summary crawl https://docs.example.com -p "API reference" --limit 10 --depth 2
 ```
 
-### Stats
+### Stats & Cache
 ```bash
 ai-summary stats
 ai-summary stats --json
 ai-summary reset-stats
+ai-summary reset-cache     # Clear summary cache
 ```
 
 ### Init (Claude Code setup)
@@ -92,6 +93,9 @@ ai-summary config
 - `--deep` — Fetch more pages (5 instead of 3)
 - `--raw` — Skip summarization, return raw content
 - `--json` — Structured JSON output for scripting
+- `--metadata` — Add source URLs, timestamps, cache status, model to JSON output
+- `--no-cache` — Bypass summary cache (force fresh LLM call)
+- `--doc` — Doc-aware mode (reserved for future)
 - `--browser` — Use agent-browser for JS-heavy pages
 - `--cf` — Use Cloudflare Browser Rendering
 - `--api-url` — Override LLM API endpoint
@@ -150,7 +154,16 @@ Requires `jq` and `ai-summary` in PATH.
 - `AI_SUMMARY_API_KEY` — Override API key
 - `AI_SUMMARY_MODEL` — Override model name
 
-## Benchmarks (v2.6.0)
+## Summary Cache
+
+ai-summary caches LLM summaries for 1 hour (browser-style TTL). Cache key is SHA256(url|prompt).
+
+- Cache hit: returns instantly (0.2s vs 10-20s)
+- `--no-cache`: bypass cache, force fresh summarization
+- `ai-summary reset-cache`: clear all cached entries
+- Cache location: `~/.ai-summary/cache/`
+
+## Benchmarks (v2.8.0)
 
 Real-world evaluation (2026-03-14), free LLM backends:
 
