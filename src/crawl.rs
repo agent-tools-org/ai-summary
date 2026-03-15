@@ -205,7 +205,7 @@ pub fn run_crawl(
         .as_deref()
         .unwrap_or("Summarize the following crawled website content");
     eprintln!("Summarizing with {} ({})...", cfg.model, cfg.api_url);
-    let result = llm_summarize(client, cfg, q, &ctx);
+    let result = llm_summarize(client, cfg, q, &ctx, false);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 

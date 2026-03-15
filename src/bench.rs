@@ -41,7 +41,7 @@ fn bench_row(client: &Client, cfg: &Config, url: &str) -> Option<BenchRow> {
     let (source, text) = fetch_content(client, cfg, url)?;
     let raw_chars = text.len() as u64;
     eprintln!("[bench] Summarizing {url} ({raw_chars} chars)...");
-    let summary = llm_summarize(client, cfg, "", &text);
+    let summary = llm_summarize(client, cfg, "", &text, false);
     let raw_tokens = raw_chars / 4;
     let compressed_tokens = summary.summary_chars / 4;
     let ratio_pct = if raw_tokens == 0 {
