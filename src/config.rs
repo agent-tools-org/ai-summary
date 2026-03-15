@@ -369,6 +369,9 @@ jina_api_key = ""
                 api_key: None,
                 model: Some("cli-model".to_string()),
                 json: false,
+                no_cache: false,
+                doc: false,
+                metadata: false,
             };
             let cfg = resolve_config(&cli);
             assert_eq!(cfg.api_url, "https://cli.url");
