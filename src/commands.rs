@@ -171,7 +171,9 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
             }
         } else {
             let res = llm_summarize(client, cfg, query, &ctx, streaming);
-            cache::cache_put(query, query, &res.text, raw_total, res.summary_chars);
+            if !res.text.is_empty() {
+                cache::cache_put(query, query, &res.text, raw_total, res.summary_chars);
+            }
             res
         }
     } else {
@@ -302,7 +304,9 @@ pub fn run_fetch(
             }
         } else {
             let res = llm_summarize(client, cfg, q, &ctx, streaming);
-            cache::cache_put(&urls[0], q, &res.text, raw_total, res.summary_chars);
+            if !res.text.is_empty() {
+                cache::cache_put(&urls[0], q, &res.text, raw_total, res.summary_chars);
+            }
             res
         }
     } else {
