@@ -157,6 +157,7 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
         }
     }
 
+    let streaming = !cli.json && !cli.metadata && atty::is(atty::Stream::Stdout);
     let mut cached = false;
     let result = if !cli.no_cache {
         if let Some(entry) = cache::cache_get(query, query) {
@@ -169,12 +170,12 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
                 summary_chars: entry.summary_chars,
             }
         } else {
-            let res = llm_summarize(client, cfg, query, &ctx);
+            let res = llm_summarize(client, cfg, query, &ctx, streaming);
             cache::cache_put(query, query, &res.text, raw_total, res.summary_chars);
             res
         }
     } else {
-        llm_summarize(client, cfg, query, &ctx)
+        llm_summarize(client, cfg, query, &ctx, streaming)
     };
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
@@ -212,6 +213,8 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
             }
         }
         println!("{}", serde_json::to_string(&json_val).unwrap());
+    } else if streaming {
+        println!();
     } else {
         println!("{}", result.text);
     }
@@ -285,6 +288,7 @@ pub fn run_fetch(
     let q = prompt
         .as_deref()
         .unwrap_or("Summarize the following content");
+    let streaming = !cli.json && !cli.metadata && atty::is(atty::Stream::Stdout);
     let mut cached = false;
     let result = if !cli.no_cache && urls.len() == 1 {
         if let Some(entry) = cache::cache_get(&urls[0], q) {
@@ -297,12 +301,12 @@ pub fn run_fetch(
                 summary_chars: entry.summary_chars,
             }
         } else {
-            let res = llm_summarize(client, cfg, q, &ctx);
+            let res = llm_summarize(client, cfg, q, &ctx, streaming);
             cache::cache_put(&urls[0], q, &res.text, raw_total, res.summary_chars);
             res
         }
     } else {
-        llm_summarize(client, cfg, q, &ctx)
+        llm_summarize(client, cfg, q, &ctx, streaming)
     };
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
@@ -339,6 +343,8 @@ pub fn run_fetch(
             }
         }
         println!("{}", serde_json::to_string(&json_val).unwrap());
+    } else if streaming {
+        println!();
     } else {
         println!("{}", result.text);
     }
@@ -368,7 +374,8 @@ pub fn run_summarize(cli: &Cli, cfg: &Config, client: &Client, prompt: &str) {
         return;
     }
 
-    let result = llm_summarize(client, cfg, prompt, &input);
+    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
+    let result = llm_summarize(client, cfg, prompt, &input, streaming);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 
@@ -392,6 +399,8 @@ pub fn run_summarize(cli: &Cli, cfg: &Config, client: &Client, prompt: &str) {
             "duration_secs": dur,
         });
         println!("{}", serde_json::to_string(&json_val).unwrap());
+    } else if streaming {
+        println!();
     } else {
         println!("{}", result.text);
     }
@@ -458,8 +467,9 @@ pub fn run_github(
         "Summarize these code search results: key patterns, important files, and how they work"
     };
     let q = prompt.as_deref().unwrap_or(default_q);
+    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
 
-    let result = llm_summarize(client, cfg, q, &content);
+    let result = llm_summarize(client, cfg, q, &content, streaming);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 
@@ -475,6 +485,8 @@ pub fn run_github(
             "duration_secs": dur,
         });
         println!("{}", serde_json::to_string(&json_val).unwrap());
+    } else if streaming {
+        println!();
     } else {
         println!("{}", result.text);
     }
@@ -698,7 +710,8 @@ pub fn run_repo(
     let q = prompt.as_deref().unwrap_or(
         "Summarize this repository: its purpose, architecture, key modules, and tech stack",
     );
-    let result = llm_summarize(client, cfg, q, &output);
+    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
+    let result = llm_summarize(client, cfg, q, &output, streaming);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 
@@ -714,6 +727,8 @@ pub fn run_repo(
             "duration_secs": dur,
         });
         println!("{}", serde_json::to_string(&json_val).unwrap());
+    } else if streaming {
+        println!();
     } else {
         println!("{}", result.text);
     }
