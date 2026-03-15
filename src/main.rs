@@ -4,6 +4,7 @@
 
 mod bench;
 mod commands;
+mod cache;
 mod compress;
 mod config;
 mod crawl;
@@ -61,6 +62,15 @@ pub struct Cli {
     pub api_key: Option<String>,
     #[arg(long, env = "AI_SUMMARY_MODEL", global = true)]
     pub model: Option<String>,
+    /// Bypass summary cache
+    #[arg(long, global = true)]
+    pub no_cache: bool,
+    /// Doc-aware mode (reserved for future)
+    #[arg(long, global = true)]
+    pub doc: bool,
+    /// Output structured JSON metadata
+    #[arg(long, global = true)]
+    pub metadata: bool,
     #[arg(long, global = true)]
     pub json: bool,
 }
@@ -95,6 +105,8 @@ pub enum Commands {
     },
     Stats,
     ResetStats,
+    /// Clear the summary cache
+    ResetCache,
     Config,
     /// Benchmark fetch + summarization on a set of test URLs.
     Bench,
@@ -188,6 +200,10 @@ fn main() {
         Commands::ResetStats => {
             let _ = fs::remove_file(stats_path());
             println!("Statistics reset.");
+        }
+        Commands::ResetCache => {
+            let count = cache::cache_clear();
+            println!("Cleared {count} cached entries.");
         }
         Commands::Config => {
             print_config();

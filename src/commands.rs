@@ -6,13 +6,15 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::cache;
 use crate::config::Config;
 use crate::fetch::fetch_pages_parallel;
 use crate::llm::llm_summarize;
 use crate::search::{has_gemini_cli, search_gemini, search_gemini_cli, search_web};
 use crate::stats::{fmtn, record_search};
+use crate::types::SummarizeResult;
 use crate::Cli;
 
 pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
@@ -155,7 +157,25 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
         }
     }
 
-    let result = llm_summarize(client, cfg, query, &ctx);
+    let mut cached = false;
+    let result = if !cli.no_cache {
+        if let Some(entry) = cache::cache_get(query, query) {
+            eprintln!("[ai-summary] cache hit");
+            cached = true;
+            SummarizeResult {
+                text: entry.summary,
+                usage: None,
+                raw_chars: entry.raw_chars,
+                summary_chars: entry.summary_chars,
+            }
+        } else {
+            let res = llm_summarize(client, cfg, query, &ctx);
+            cache::cache_put(query, query, &res.text, raw_total, res.summary_chars);
+            res
+        }
+    } else {
+        llm_summarize(client, cfg, query, &ctx)
+    };
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 
@@ -169,8 +189,8 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
         dur,
     );
     let tokens_saved = (raw_total / 4).saturating_sub(result.summary_chars / 4);
-    if cli.json {
-        let json_val = json!({
+    if cli.json || cli.metadata {
+        let mut json_val = json!({
             "query": query,
             "mode": "search",
             "summary": result.text,
@@ -178,6 +198,19 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
             "tokens_saved": tokens_saved,
             "duration_secs": dur,
         });
+        if cli.metadata {
+            if let Some(map) = json_val.as_object_mut() {
+                let fetch_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let source_urls = urls.clone();
+                map.insert("source_urls".to_string(), json!(source_urls));
+                map.insert("fetch_timestamp".to_string(), json!(fetch_timestamp));
+                map.insert("cached".to_string(), json!(cached));
+                map.insert("model".to_string(), json!(cfg.model.clone()));
+            }
+        }
         println!("{}", serde_json::to_string(&json_val).unwrap());
     } else {
         println!("{}", result.text);
@@ -252,7 +285,25 @@ pub fn run_fetch(
     let q = prompt
         .as_deref()
         .unwrap_or("Summarize the following content");
-    let result = llm_summarize(client, cfg, q, &ctx);
+    let mut cached = false;
+    let result = if !cli.no_cache && urls.len() == 1 {
+        if let Some(entry) = cache::cache_get(&urls[0], q) {
+            eprintln!("[ai-summary] cache hit");
+            cached = true;
+            SummarizeResult {
+                text: entry.summary,
+                usage: None,
+                raw_chars: entry.raw_chars,
+                summary_chars: entry.summary_chars,
+            }
+        } else {
+            let res = llm_summarize(client, cfg, q, &ctx);
+            cache::cache_put(&urls[0], q, &res.text, raw_total, res.summary_chars);
+            res
+        }
+    } else {
+        llm_summarize(client, cfg, q, &ctx)
+    };
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
 
@@ -266,14 +317,27 @@ pub fn run_fetch(
         dur,
     );
     let tokens_saved = (raw_total / 4).saturating_sub(result.summary_chars / 4);
-    if cli.json {
-        let json_val = json!({
+    if cli.json || cli.metadata {
+        let mut json_val = json!({
             "urls": urls,
             "summary": result.text,
             "pages_fetched": pages.len(),
             "tokens_saved": tokens_saved,
             "duration_secs": dur,
         });
+        if cli.metadata {
+            if let Some(map) = json_val.as_object_mut() {
+                let fetch_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let source_urls = urls.to_vec();
+                map.insert("source_urls".to_string(), json!(source_urls));
+                map.insert("fetch_timestamp".to_string(), json!(fetch_timestamp));
+                map.insert("cached".to_string(), json!(cached));
+                map.insert("model".to_string(), json!(cfg.model.clone()));
+            }
+        }
         println!("{}", serde_json::to_string(&json_val).unwrap());
     } else {
         println!("{}", result.text);

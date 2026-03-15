@@ -5,17 +5,17 @@ Web search & summarization CLI for AI coding agents. Reduces token consumption b
 ## How It Works
 
 ```
-┌──────────────┐     ┌──────────┐     ┌───────────┐     ┌──────────────┐
-│  Web Search  │────▶│  Fetch   │────▶│ Readability│────▶│  LLM Summary │
-│ Gemini/DDG/  │     │  Pages   │     │ Extract    │     │ Local/Remote │
-│   Brave      │     │          │     │            │     │              │
-└──────────────┘     └──────────┘     └───────────┘     └──────────────┘
-                                                               │
-                                                               ▼
-                                                     ┌──────────────────┐
-                                                     │ Compressed output │
-                                                     │ (60-98% smaller) │
-                                                     └──────────────────┘
+┌──────────────┐     ┌──────────┐     ┌───────────┐     ┌─────────┐     ┌──────────────┐
+│  Web Search  │────▶│  Fetch   │────▶│ Readability│────▶│  Cache  │────▶│  LLM Summary │
+│ Gemini/DDG/  │     │  Pages   │     │ Extract    │     │ (1h TTL)│     │ Local/Remote │
+│   Brave      │     │          │     │            │     │         │     │              │
+└──────────────┘     └──────────┘     └───────────┘     └─────────┘     └──────────────┘
+                                                                              │
+                                                                              ▼
+                                                                    ┌──────────────────┐
+                                                                    │ Compressed output │
+                                                                    │ (60-98% smaller) │
+                                                                    └──────────────────┘
 ```
 
 Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused 1-4K summary — saving tokens and money.
@@ -32,6 +32,8 @@ Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused
 - **JS-heavy Pages** — agent-browser and Cloudflare Browser Rendering support
 - **Pipe-friendly** — `cat urls.txt | ai-summary fetch`, `--json` output, standard exit codes
 - **Claude Code Hook** — PreToolUse hook rewrites test commands for real token savings
+- **Summary Cache** — 1-hour TTL, SHA256-keyed, browser-style caching with `--no-cache` bypass
+- **Structured Metadata** — `--metadata` flag adds source URLs, timestamps, cache status, and model info to JSON output
 - **Rich Statistics** — Time-period breakdown, ROI tracking, per-mode analysis
 - **Multiple LLM Backends** — opencode (free), oMLX (local), OpenAI, Groq, DeepSeek, or any OpenAI-compatible API
 
@@ -175,6 +177,7 @@ Requires `jq` and `ai-summary` in PATH.
 | `ai-summary init` | Install Claude Code integration (prompt + hook) |
 | `ai-summary stats` | Show token savings statistics |
 | `ai-summary reset-stats` | Reset statistics |
+| `ai-summary reset-cache` | Clear the summary cache |
 | `ai-summary config` | Show or create config file |
 
 ### Flags
@@ -184,6 +187,9 @@ Requires `jq` and `ai-summary` in PATH.
 | `--deep` | Fetch more pages (5 instead of 3) |
 | `--raw` | Skip summarization, return raw content |
 | `--json` | Structured JSON output (for scripting/piping) |
+| `--metadata` | Add source URLs, timestamps, cache status, model to JSON output |
+| `--no-cache` | Bypass the summary cache (force fresh LLM call) |
+| `--doc` | Doc-aware mode (reserved for future) |
 | `--browser` | Use agent-browser for JS-heavy pages |
 | `--cf` | Use Cloudflare Browser Rendering |
 | `--api-url` | Override API endpoint |
