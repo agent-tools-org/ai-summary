@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.11.0 (2026-03-16)
+
+### Added
+- Optional [defuddle](https://github.com/kepano/defuddle) content extraction backend — produces clean markdown output with site-specific extractors for YouTube, GitHub, Reddit, Twitter, HackerNews, and more
+- Auto-detection: uses global `defuddle` CLI first, then `npx defuddle`, falls back to readability if neither available
+- Install with `npm install -g defuddle` for best extraction quality (no config needed)
+
 ## v2.10.0 (2026-03-15)
 
 ### Added
