@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ai-summary — Web search and summarization CLI for AI coding agents. Compresses web content via local LLMs to reduce token consumption for Claude Code.">
-  <meta name="keywords" content="ai-summary, CLI, summarization, web search, token compression, Claude Code, LLM, readability">
+  <meta name="keywords" content="ai-summary, CLI, summarization, web search, token compression, Claude Code, LLM, readability, defuddle, markdown">
   <title>ai-summary — Web search & summarization CLI for AI agents</title>
   <link rel="alternate" type="text/plain" href="/llms.txt" title="LLM-readable summary">
   <link rel="stylesheet" href="style.css">
@@ -37,7 +37,7 @@
     <section id="how-it-works">
       <h2>How It Works</h2>
       <p>Pipeline:</p>
-      <pre><code>Web Search → Fetch Pages → Readability Extract → Cache (1h TTL) → LLM Summary → Compressed output (60–98% smaller)</code></pre>
+      <pre><code>Web Search → Fetch Pages → Defuddle / Readability Extract → Cache (1h TTL) → LLM Summary → Compressed output (60–98% smaller)</code></pre>
       <p>Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused 1–4K summary.</p>
     </section>
 
@@ -45,7 +45,7 @@
       <h2>Features</h2>
       <ul>
         <li><strong>Search + Summarize</strong> — Gemini (Google Search grounding), DuckDuckGo, or Brave</li>
-        <li><strong>Fetch + Summarize</strong> — Fetch any URL, extract article content, summarize with LLM</li>
+        <li><strong>Fetch + Summarize</strong> — Fetch any URL, extract content via <a href="https://github.com/kepano/defuddle">defuddle</a> (markdown + site-specific extractors) or readability fallback, summarize with LLM</li>
         <li><strong>Stdin Summarize</strong> — Pipe any text through for compression</li>
         <li><strong>Fast Compress</strong> — No-LLM text extraction for instant compression</li>
         <li><strong>JS-heavy Pages</strong> — agent-browser and Cloudflare Browser Rendering</li>

@@ -117,8 +117,14 @@ Config file: `~/.ai-summary/config.toml` (auto-created with `ai-summary config`)
 3. **DuckDuckGo** — Free, no API key needed
 4. **Brave Search** — Requires BRAVE_API_KEY
 
+### Content Extraction (fallback order)
+1. **Defuddle** — Clean markdown output with site-specific extractors for YouTube, GitHub, Reddit, Twitter, HN, etc. Install with `npm install -g defuddle` (optional)
+2. **Readability** — Built-in plain text extraction (always available, no dependencies)
+
+Quality check: if defuddle returns less than 1/4 of the raw text (e.g. JS-heavy SPA pages), automatically falls back to readability.
+
 ### Fetch Backends (fallback order)
-1. **HTTP fetch** — Direct reqwest with readability extraction
+1. **HTTP fetch** — Direct reqwest with content extraction (defuddle or readability)
 2. **Jina Reader** — r.jina.ai fallback for failed fetches (requires JINA_API_KEY)
 3. **agent-browser** — Headless browser for JS-heavy pages
 4. **Cloudflare Browser Rendering** — Cloud-based rendering (requires CF credentials)
