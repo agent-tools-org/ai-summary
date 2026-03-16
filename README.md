@@ -6,8 +6,8 @@ Web search & summarization CLI for AI coding agents. Reduces token consumption b
 
 ```
 ┌──────────────┐     ┌──────────┐     ┌───────────┐     ┌─────────┐     ┌──────────────┐
-│  Web Search  │────▶│  Fetch   │────▶│ Readability│────▶│  Cache  │────▶│  LLM Summary │
-│ Gemini/DDG/  │     │  Pages   │     │ Extract    │     │ (1h TTL)│     │ Local/Remote │
+│  Web Search  │────▶│  Fetch   │────▶│ Defuddle / │────▶│  Cache  │────▶│  LLM Summary │
+│ Gemini/DDG/  │     │  Pages   │     │ Readability│     │ (1h TTL)│     │ Local/Remote │
 │   Brave      │     │          │     │            │     │         │     │              │
 └──────────────┘     └──────────┘     └───────────┘     └─────────┘     └──────────────┘
                                                                               │
@@ -23,7 +23,7 @@ Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused
 ## Features
 
 - **Search + Summarize** — Gemini (Google Search grounding), DuckDuckGo, or Brave Search
-- **Fetch + Summarize** — Fetch any URL, extract article content via readability, summarize with LLM
+- **Fetch + Summarize** — Fetch any URL, extract content via [defuddle](https://github.com/kepano/defuddle) (markdown, site-specific extractors) or readability fallback, summarize with LLM
 - **PDF & DOCX Support** — Fetch and summarize PDF papers and Word documents directly
 - **Stdin Summarize** — Pipe any text through for compression
 - **Fast Compress** — No-LLM text extraction for instant compression
