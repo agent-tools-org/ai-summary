@@ -26,7 +26,7 @@ use std::io::Read;
 use crate::bench::run_bench;
 use crate::commands::{run_fetch, run_github, run_repo, run_search, run_summarize};
 use crate::compress::run_compress;
-use crate::config::{print_config, resolve_config};
+use crate::config::{print_config, resolve_config, run_setup};
 use crate::crawl::run_crawl;
 use crate::stats::{print_stats, print_stats_json, stats_path};
 use crate::wrap::run_wrap;
@@ -152,6 +152,12 @@ pub enum Commands {
         #[arg(long)]
         with_repomix: bool,
     },
+    #[command(about = "Configure LLM backend (OpenRouter API key, etc.)")]
+    Setup {
+        /// Set OpenRouter API key for direct API calls (no subprocess overhead)
+        #[arg(long)]
+        openrouter_key: Option<String>,
+    },
 }
 
 fn main() {
@@ -210,6 +216,9 @@ fn main() {
         }
         Commands::Init { uninstall, with_repomix } => {
             run_init(*uninstall, *with_repomix);
+        }
+        Commands::Setup { openrouter_key } => {
+            run_setup(openrouter_key.as_deref());
         }
         Commands::Wrap { command } => {
             run_wrap(command);

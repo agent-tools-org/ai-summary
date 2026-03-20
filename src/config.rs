@@ -33,6 +33,14 @@ pub struct Config {
     pub cf_api_token: String,
     #[serde(default)]
     pub jina_api_key: String,
+    #[serde(default)]
+    pub openrouter_api_key: String,
+    #[serde(default = "default_openrouter_model")]
+    pub openrouter_model: String,
+}
+
+fn default_openrouter_model() -> String {
+    "xiaomi/mimo-v2-flash".to_string()
 }
 
 fn default_gemini_model() -> String {
@@ -66,6 +74,8 @@ impl Default for Config {
             cf_account_id: String::new(),
             cf_api_token: String::new(),
             jina_api_key: String::new(),
+            openrouter_api_key: String::new(),
+            openrouter_model: default_openrouter_model(),
         }
     }
 }
@@ -125,6 +135,11 @@ pub fn resolve_config(cli: &Cli) -> Config {
             cfg.jina_api_key = value;
         }
     }
+    if cfg.openrouter_api_key.is_empty() {
+        if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+            cfg.openrouter_api_key = key;
+        }
+    }
     cfg
 }
 
@@ -175,6 +190,12 @@ max_pages = {}
 max_page_chars = {}
 max_summary_tokens = {}
 
+# --- OpenRouter (direct API, fast + cheap) ---
+# Get key at: https://openrouter.ai/keys
+# Or run: ai-summary setup --openrouter-key YOUR_KEY
+# openrouter_api_key = ""
+# openrouter_model = "xiaomi/mimo-v2-flash"  # ~$0.05/1M tokens
+
 # --- Fetch fallback ---
 # Jina Reader API (free tier available: https://jina.ai/reader/)
 # jina_api_key = ""
@@ -214,6 +235,78 @@ pub fn load_omlx_api_key() -> String {
                 .map(String::from)
         })
         .unwrap_or_default()
+}
+
+pub fn set_openrouter_key(key: &str) {
+    let path = config_path();
+    let mut content = if path.exists() {
+        fs::read_to_string(&path).unwrap_or_default()
+    } else {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        String::new()
+    };
+    if let Some(start) = content.find("openrouter_api_key") {
+        if let Some(nl) = content[start..].find('\n') {
+            content.replace_range(start..start + nl, &format!("openrouter_api_key = \"{key}\""));
+        } else {
+            content.replace_range(start.., &format!("openrouter_api_key = \"{key}\""));
+        }
+    } else {
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&format!("\nopenrouter_api_key = \"{key}\"\n"));
+    }
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, content);
+}
+
+pub fn run_setup(openrouter_key: Option<&str>) {
+    if let Some(key) = openrouter_key {
+        set_openrouter_key(key);
+        println!("OpenRouter API key saved to {}", config_path().display());
+        println!("LLM calls will now use OpenRouter directly (no subprocess overhead).");
+        return;
+    }
+    let cfg = resolve_config(&crate::Cli {
+        command: crate::Commands::Stats,
+        deep: false,
+        raw: false,
+        cf: false,
+        browser: false,
+        api_url: None,
+        api_key: None,
+        model: None,
+        json: false,
+        no_cache: false,
+        doc: false,
+        metadata: false,
+    });
+    println!("ai-summary setup\n");
+    println!("LLM backend priority:");
+    if !cfg.openrouter_api_key.is_empty() {
+        println!("  1. OpenRouter API ({}) — configured", cfg.openrouter_model);
+    } else {
+        println!("  1. OpenRouter API (direct) — not configured");
+    }
+    if crate::llm::has_opencode() {
+        println!("  2. opencode CLI (subprocess) — installed");
+    } else {
+        println!("  2. opencode CLI (subprocess) — not found");
+    }
+    println!("  3. Custom API — {} ({})", cfg.model, cfg.api_url);
+    println!();
+    println!("To enable direct OpenRouter calls (faster, no subprocess):");
+    println!("  ai-summary setup --openrouter-key YOUR_KEY");
+    println!();
+    println!("Or set env: export OPENROUTER_API_KEY=sk-or-...");
+    println!("Get a free key at: https://openrouter.ai/keys");
+    println!();
+    println!("Config: {}", config_path().display());
 }
 
 #[cfg(test)]
