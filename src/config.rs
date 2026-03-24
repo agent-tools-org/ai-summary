@@ -37,6 +37,8 @@ pub struct Config {
     pub openrouter_api_key: String,
     #[serde(default = "default_openrouter_model")]
     pub openrouter_model: String,
+    #[serde(default)]
+    pub tavily_api_key: String,
 }
 
 fn default_openrouter_model() -> String {
@@ -76,6 +78,7 @@ impl Default for Config {
             jina_api_key: String::new(),
             openrouter_api_key: String::new(),
             openrouter_model: default_openrouter_model(),
+            tavily_api_key: String::new(),
         }
     }
 }
@@ -138,6 +141,11 @@ pub fn resolve_config(cli: &Cli) -> Config {
     if cfg.openrouter_api_key.is_empty() {
         if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
             cfg.openrouter_api_key = key;
+        }
+    }
+    if cfg.tavily_api_key.is_empty() {
+        if let Ok(key) = std::env::var("TAVILY_API_KEY") {
+            cfg.tavily_api_key = key;
         }
     }
     cfg
