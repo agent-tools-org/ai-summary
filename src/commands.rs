@@ -90,7 +90,7 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
     }
 
     eprintln!("Searching: {query}");
-    let results = search_web(client, query, 6, &cfg.brave_api_key);
+    let results = search_web(client, query, 6, &cfg.brave_api_key, &cfg.tavily_api_key);
     let t1 = Instant::now();
     if results.is_empty() {
         eprintln!("No search results found.");

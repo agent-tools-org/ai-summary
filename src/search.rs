@@ -243,17 +243,77 @@ pub fn search_gemini(
     })
 }
 
-pub fn search_web(client: &Client, query: &str, num: usize, brave_key: &str) -> Vec<SearchResult> {
+pub fn search_web(
+    client: &Client,
+    query: &str,
+    num: usize,
+    brave_key: &str,
+    tavily_key: &str,
+) -> Vec<SearchResult> {
     let results = search_ddg(client, query, num);
     if !results.is_empty() {
         return results;
+    }
+    if !tavily_key.is_empty() {
+        eprintln!("[ai-summary] DDG unavailable, trying Tavily Search...");
+        let tavily_results = search_tavily(client, query, num, tavily_key);
+        if !tavily_results.is_empty() {
+            return tavily_results;
+        }
     }
     if !brave_key.is_empty() {
         eprintln!("[ai-summary] DDG unavailable, trying Brave Search...");
         return search_brave(client, query, num, brave_key);
     }
-    eprintln!("[ai-summary] DDG unavailable. Set gemini_api_key or brave_api_key in config.");
+    eprintln!("[ai-summary] DDG unavailable. Set gemini_api_key, tavily_api_key, or brave_api_key in config.");
     vec![]
+}
+
+pub fn search_tavily(client: &Client, query: &str, num: usize, key: &str) -> Vec<SearchResult> {
+    let payload = serde_json::json!({
+        "api_key": key,
+        "query": query,
+        "max_results": num,
+    });
+    let body = client
+        .post("https://api.tavily.com/search")
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .ok()
+        .and_then(|response| response.text().ok())
+        .unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    value
+        .get("results")
+        .and_then(|results| results.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .take(num)
+                .filter_map(|item| {
+                    let url = item.get("url")?.as_str()?.to_string();
+                    if !url.starts_with("http") {
+                        return None;
+                    }
+                    Some(SearchResult {
+                        url,
+                        title: item
+                            .get("title")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        snippet: item
+                            .get("content")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn search_ddg(client: &Client, query: &str, num: usize) -> Vec<SearchResult> {
@@ -450,6 +510,58 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn tavily_parses_filtered_results() {
+        let body = r#"{
+            "results": [
+                {"url": "https://one.example/", "title": "One", "content": "One content"},
+                {"url": "ftp://skip", "title": "Skip", "content": "Ignored"},
+                {"url": "https://two.example/", "title": "Two", "content": "Two content"}
+            ]
+        }"#;
+        let results = parse_tavily_json(body, 5);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].url, "https://one.example/");
+        assert_eq!(results[0].title, "One");
+        assert_eq!(results[0].snippet, "One content");
+        assert_eq!(results[1].url, "https://two.example/");
+        assert_eq!(results[1].title, "Two");
+        assert_eq!(results[1].snippet, "Two content");
+    }
+
+    fn parse_tavily_json(body: &str, limit: usize) -> Vec<SearchResult> {
+        let value: Value = serde_json::from_str(body).unwrap_or_default();
+        value
+            .get("results")
+            .and_then(|results| results.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .take(limit)
+                    .filter_map(|item| {
+                        let url = item.get("url")?.as_str()?.to_string();
+                        if !url.starts_with("http") {
+                            return None;
+                        }
+                        Some(SearchResult {
+                            url,
+                            title: item
+                                .get("title")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            snippet: item
+                                .get("content")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn parse_brave_json(body: &str, limit: usize) -> Vec<SearchResult> {
