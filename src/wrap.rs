@@ -21,7 +21,7 @@ pub fn run_wrap(command: &[String]) -> ! {
         eprintln!("[ai-summary] wrap: no command provided");
         std::process::exit(1);
     }
-    let cmd_str = command.join(" ");
+    let cmd_str = shell_join(command);
     let output = Command::new("sh")
         .args(["-c", &cmd_str])
         .stdin(Stdio::inherit())
@@ -67,6 +67,27 @@ pub fn run_wrap(command: &[String]) -> ! {
     }
 
     std::process::exit(exit_code);
+}
+
+/// Re-join argv into a shell command string WITHOUT re-splitting words.
+/// The caller's shell already consumed quotes, so each element is one word;
+/// naive `join(" ")` + `sh -c` re-splits words containing spaces (quote loss).
+/// Bare-safe words pass through unquoted (preserves `VAR=x cmd` env prefixes);
+/// anything else is single-quote escaped.
+fn shell_join(command: &[String]) -> String {
+    command.iter().map(|w| quote_word(w)).collect::<Vec<_>>().join(" ")
+}
+
+fn quote_word(word: &str) -> String {
+    let safe = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c));
+    if safe {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
 }
 
 /// Parse test result lines and return a compact summary.
@@ -277,6 +298,31 @@ mod tests {
         let output = "test result: ok. 1 passed; 0 failed; 0 ignored\n";
         let result = summarize_test_output(output).unwrap();
         assert_eq!(result, "All tests passed: 1 passed, 0 failed, 0 ignored.");
+    }
+
+    #[test]
+    fn shell_join_preserves_multiword_args() {
+        // The original quote-loss bug: an argv element containing spaces must
+        // survive the sh -c round-trip as ONE word.
+        let cmd = vec![
+            "aid".to_string(),
+            "run".to_string(),
+            "codex".to_string(),
+            "Fix GitHub issue #662 (details)".to_string(),
+        ];
+        let joined = shell_join(&cmd);
+        assert_eq!(joined, "aid run codex 'Fix GitHub issue #662 (details)'");
+    }
+
+    #[test]
+    fn shell_join_keeps_env_prefix_bare() {
+        let cmd = vec!["RUST_LOG=debug".to_string(), "cargo".to_string(), "test".to_string()];
+        assert_eq!(shell_join(&cmd), "RUST_LOG=debug cargo test");
+    }
+
+    #[test]
+    fn quote_word_escapes_single_quotes() {
+        assert_eq!(quote_word("it's"), r"'it'\''s'");
     }
 
     #[test]
