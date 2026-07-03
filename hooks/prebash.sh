@@ -17,13 +17,20 @@ fi
 # Only rewrite test commands (simple ones without pipes — piped commands
 # are already filtered and don't need wrapping)
 case "$CMD" in
-  *\|*|*\>*|*\<*) exit 0 ;;  # Skip piped/redirected commands
+  *\|*|*\>*|*\<*|*\;*|*\&\&*|*\$\(*) exit 0 ;;  # Skip piped/redirected/compound commands
 esac
 
-case "$CMD" in
-  *"cargo test"*|*"cargo nextest"*) ;;
-  *"npm test"*|*"npx vitest"*|*"npx jest"*|*"yarn test"*) ;;
-  *pytest*|*"go test"*|*"mix test"*|*"dotnet test"*|*"make test"*) ;;
+# The command must START with a test invocation (optional VAR=val env prefixes).
+# A substring match here is a footgun: a command whose ARGUMENT TEXT merely
+# mentions "cargo test" (e.g. an agent prompt) must not be wrapped.
+STRIPPED="$CMD"
+while [[ "$STRIPPED" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+ ]]; do
+  STRIPPED="${STRIPPED#*[[:space:]]}"
+done
+case "$STRIPPED" in
+  "cargo test"*|"cargo nextest"*) ;;
+  "npm test"*|"npx vitest"*|"npx jest"*|"yarn test"*) ;;
+  pytest*|"go test"*|"mix test"*|"dotnet test"*|"make test"*) ;;
   *) exit 0 ;;
 esac
 
