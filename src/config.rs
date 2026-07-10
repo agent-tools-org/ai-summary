@@ -37,6 +37,8 @@ pub struct Config {
     pub openrouter_api_key: String,
     #[serde(default = "default_openrouter_model")]
     pub openrouter_model: String,
+    #[serde(default)]
+    pub tavily_api_key: String,
 }
 
 fn default_openrouter_model() -> String {
@@ -76,6 +78,7 @@ impl Default for Config {
             jina_api_key: String::new(),
             openrouter_api_key: String::new(),
             openrouter_model: default_openrouter_model(),
+            tavily_api_key: String::new(),
         }
     }
 }
@@ -140,6 +143,11 @@ pub fn resolve_config(cli: &Cli) -> Config {
             cfg.openrouter_api_key = key;
         }
     }
+    if cfg.tavily_api_key.is_empty() {
+        if let Ok(key) = std::env::var("TAVILY_API_KEY") {
+            cfg.tavily_api_key = key;
+        }
+    }
     cfg
 }
 
@@ -181,10 +189,13 @@ model = "{}"
 gemini_api_key = ""
 gemini_model = "gemini-2.0-flash"
 
+# Tavily Search API (recommended, best for AI: https://app.tavily.com)
+# tavily_api_key = ""
+
 # Brave Search API fallback (free: https://brave.com/search/api/)
 brave_api_key = ""
 
-# Search priority: Gemini (if key set) > DuckDuckGo > Brave (if key set)
+# Search priority: Gemini (if key set) > Tavily (if key set) > DuckDuckGo > Brave (if key set)
 
 max_pages = {}
 max_page_chars = {}
