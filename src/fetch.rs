@@ -49,7 +49,7 @@ fn fetch_page_inner(
     if content_type.contains("wordprocessingml.document") || url.ends_with(".docx") {
         return fetch_binary_response(resp, url, max_chars, "docx");
     }
-    if !content_type.contains("text/html") && !content_type.contains("text/plain") {
+    if !is_text_response(content_type, url) {
         eprintln!("[ai-summary] Skipping {url}: content-type {content_type}");
         return None;
     }
@@ -74,6 +74,17 @@ fn fetch_page_inner(
         text: truncate_text(text, max_chars),
     })
 }
+
+fn is_text_response(content_type: &str, url: &str) -> bool {
+    if content_type.is_empty() {
+        return true;
+    }
+    content_type.contains("text/html")
+        || content_type.contains("text/plain")
+        || url.ends_with(".html")
+        || url.ends_with(".txt")
+}
+
 fn fetch_binary_response(
     resp: reqwest::blocking::Response,
     url: &str,
@@ -367,5 +378,15 @@ mod tests {
     fn has_agent_browser_returns_bool() {
         let result = has_agent_browser();
         assert!(result == true || result == false);
+    }
+
+    #[test]
+    fn empty_content_type_is_allowed_for_text_fallback() {
+        assert!(is_text_response("", "https://example.com/article"));
+    }
+
+    #[test]
+    fn binary_content_type_is_rejected_for_text_fallback() {
+        assert!(!is_text_response("image/png", "https://example.com/image.png"));
     }
 }

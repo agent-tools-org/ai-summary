@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.12.1 (2026-07-26)
+
+### Fixed
+- Preserve raw fetch output for text responses that omit `Content-Type`.
+- Surface HTTP status and provider error messages for failed LLM API calls instead of generic parse errors.
+
+### Changed
+- Split the LLM backend into smaller HTTP, streaming, opencode, and cleanup modules.
+- Reuse the production DuckDuckGo and Brave parsers in tests instead of duplicated test-only parser code.
+
+### Added
+- Local end-to-end CLI coverage for raw fetch and stdin compression flows.
+
 ## v2.11.0 (2026-03-16)
 
 ### Added

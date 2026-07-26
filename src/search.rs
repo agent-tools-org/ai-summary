@@ -268,7 +268,11 @@ pub fn search_ddg(client: &Client, query: &str, num: usize) -> Vec<SearchResult>
     if resp.is_empty() {
         return vec![];
     }
-    let doc = Html::parse_document(&resp);
+    parse_ddg_html(&resp, num)
+}
+
+pub(crate) fn parse_ddg_html(html: &str, limit: usize) -> Vec<SearchResult> {
+    let doc = Html::parse_document(html);
     let result_selector = Selector::parse(".result").unwrap();
     let link_selector = Selector::parse("a.result__a").unwrap();
     let snippet_selector = Selector::parse("a.result__snippet").unwrap();
@@ -298,7 +302,7 @@ pub fn search_ddg(client: &Client, query: &str, num: usize) -> Vec<SearchResult>
                 title,
                 snippet,
             });
-            if out.len() >= num {
+            if out.len() >= limit {
                 break;
             }
         }
@@ -321,7 +325,11 @@ pub fn search_brave(client: &Client, query: &str, num: usize, key: &str) -> Vec<
         .ok()
         .and_then(|response| response.text().ok())
         .unwrap_or_default();
-    let value: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+    parse_brave_json(&body, num)
+}
+
+pub(crate) fn parse_brave_json(body: &str, limit: usize) -> Vec<SearchResult> {
+    let value: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     value
         .get("web")
         .and_then(|web| web.get("results"))
@@ -329,7 +337,7 @@ pub fn search_brave(client: &Client, query: &str, num: usize, key: &str) -> Vec<
         .map(|items| {
             items
                 .iter()
-                .take(num)
+                .take(limit)
                 .filter_map(|item| {
                     let url = item.get("url")?.as_str()?.to_string();
                     if !url.starts_with("http") {
@@ -357,7 +365,6 @@ pub fn search_brave(client: &Client, query: &str, num: usize, key: &str) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     #[test]
     fn urlenc_handles_spaces_and_ampersands() {
@@ -415,74 +422,5 @@ mod tests {
         assert_eq!(results[1].url, "https://beta.example/");
         assert_eq!(results[1].title, "");
         assert_eq!(results[1].snippet, "");
-    }
-
-    fn parse_ddg_html(html: &str, limit: usize) -> Vec<SearchResult> {
-        let doc = Html::parse_document(html);
-        let result_selector = Selector::parse(".result").unwrap();
-        let link_selector = Selector::parse("a.result__a").unwrap();
-        let snippet_selector = Selector::parse("a.result__snippet").unwrap();
-        let mut out = Vec::new();
-        for el in doc.select(&result_selector) {
-            if let Some(link) = el.select(&link_selector).next() {
-                let title = link.text().collect::<String>().trim().to_string();
-                let href = link.value().attr("href").unwrap_or("");
-                let url = if href.contains("uddg=") {
-                    href.split("uddg=")
-                        .nth(1)
-                        .map(|segment| urldec(segment.split('&').next().unwrap_or(segment)))
-                        .unwrap_or_default()
-                } else {
-                    href.to_string()
-                };
-                if !url.starts_with("http") {
-                    continue;
-                }
-                let snippet = el
-                    .select(&snippet_selector)
-                    .next()
-                    .map(|item| item.text().collect::<String>().trim().to_string())
-                    .unwrap_or_default();
-                out.push(SearchResult { url, title, snippet });
-                if out.len() >= limit {
-                    break;
-                }
-            }
-        }
-        out
-    }
-
-    fn parse_brave_json(body: &str, limit: usize) -> Vec<SearchResult> {
-        let value: Value = serde_json::from_str(body).unwrap_or_default();
-        value
-            .get("web")
-            .and_then(|web| web.get("results"))
-            .and_then(|results| results.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .take(limit)
-                    .filter_map(|item| {
-                        let url = item.get("url")?.as_str()?.to_string();
-                        if !url.starts_with("http") {
-                            return None;
-                        }
-                        Some(SearchResult {
-                            url,
-                            title: item
-                                .get("title")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            snippet: item
-                                .get("description")
-                                .and_then(|value| value.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 }
