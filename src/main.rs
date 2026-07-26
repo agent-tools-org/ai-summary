@@ -14,6 +14,7 @@ mod llm;
 mod search;
 mod stats;
 mod stats_history;
+mod terminal;
 mod types;
 mod wrap;
 mod init;
@@ -230,7 +231,7 @@ fn main() {
             run_summarize(&cli, &cfg, &client, &prompt.join(" "));
         }
         Commands::Fetch { urls, prompt } => {
-            let urls = if urls.is_empty() && !atty::is(atty::Stream::Stdin) {
+            let urls = if urls.is_empty() && !terminal::is_stdin_terminal() {
                 let mut input = String::new();
                 if let Err(e) = std::io::stdin().read_to_string(&mut input) {
                     eprintln!("[ai-summary] Failed to read stdin: {e}");

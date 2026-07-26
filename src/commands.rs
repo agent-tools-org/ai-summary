@@ -14,6 +14,7 @@ use crate::fetch::fetch_pages_parallel;
 use crate::llm::llm_summarize;
 use crate::search::{has_gemini_cli, search_gemini, search_gemini_cli, search_web};
 use crate::stats::{fmtn, record_search};
+use crate::terminal;
 use crate::types::SummarizeResult;
 use crate::Cli;
 
@@ -157,7 +158,7 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
         }
     }
 
-    let streaming = !cli.json && !cli.metadata && atty::is(atty::Stream::Stdout);
+    let streaming = !cli.json && !cli.metadata && terminal::is_stdout_terminal();
     let mut cached = false;
     let result = if !cli.no_cache {
         if let Some(entry) = cache::cache_get(query, query) {
@@ -290,7 +291,7 @@ pub fn run_fetch(
     let q = prompt
         .as_deref()
         .unwrap_or("Summarize the following content");
-    let streaming = !cli.json && !cli.metadata && atty::is(atty::Stream::Stdout);
+    let streaming = !cli.json && !cli.metadata && terminal::is_stdout_terminal();
     let mut cached = false;
     let result = if !cli.no_cache && urls.len() == 1 {
         if let Some(entry) = cache::cache_get(&urls[0], q) {
@@ -357,7 +358,7 @@ pub fn run_fetch(
 pub fn run_summarize(cli: &Cli, cfg: &Config, client: &Client, prompt: &str) {
     let t0 = Instant::now();
     let mut input = String::new();
-    if atty::is(atty::Stream::Stdin) {
+    if terminal::is_stdin_terminal() {
         eprintln!("Reading from stdin (Ctrl+D to end)...");
     }
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
@@ -378,7 +379,7 @@ pub fn run_summarize(cli: &Cli, cfg: &Config, client: &Client, prompt: &str) {
         return;
     }
 
-    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
+    let streaming = !cli.json && terminal::is_stdout_terminal();
     let result = llm_summarize(client, cfg, prompt, &input, streaming);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");
@@ -471,7 +472,7 @@ pub fn run_github(
         "Summarize these code search results: key patterns, important files, and how they work"
     };
     let q = prompt.as_deref().unwrap_or(default_q);
-    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
+    let streaming = !cli.json && terminal::is_stdout_terminal();
 
     let result = llm_summarize(client, cfg, q, &content, streaming);
     let dur = t0.elapsed().as_secs_f64();
@@ -714,7 +715,7 @@ pub fn run_repo(
     let q = prompt.as_deref().unwrap_or(
         "Summarize this repository: its purpose, architecture, key modules, and tech stack",
     );
-    let streaming = !cli.json && atty::is(atty::Stream::Stdout);
+    let streaming = !cli.json && terminal::is_stdout_terminal();
     let result = llm_summarize(client, cfg, q, &output, streaming);
     let dur = t0.elapsed().as_secs_f64();
     eprintln!("Done ({dur:.1}s total)");

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Reduce default dependency surface by replacing `atty` with `std::io::IsTerminal`.
+- Disable unused default features for `reqwest` and `scraper`.
+- Tune release builds for faster local installation with size-first optimization and thin LTO.
+
 ## v2.12.1 (2026-07-26)
 
 ### Fixed
