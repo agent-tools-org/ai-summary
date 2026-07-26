@@ -48,7 +48,7 @@ fn try_openrouter(
         return None;
     }
     let model = &cfg.openrouter_model;
-    let model_short = model.split('/').last().unwrap_or(model);
+    let model_short = model.split('/').next_back().unwrap_or(model);
     let is_free = model.ends_with(":free");
     let cost_label = if is_free { "OpenRouter, free" } else { "OpenRouter" };
     eprintln!("Summarizing with {model_short} ({cost_label})...");

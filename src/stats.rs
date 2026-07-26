@@ -170,7 +170,7 @@ pub fn print_stats() {
 
     // By Mode
     let mut modes: Vec<_> = mode_map.into_iter().collect();
-    modes.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    modes.sort_by_key(|mode| Reverse(mode.1 .1));
     let max_saved = modes.first().map(|m| m.1 .1).unwrap_or(1).max(1);
 
     println!();
