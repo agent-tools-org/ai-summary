@@ -271,6 +271,7 @@ pub fn search_brave(
     Ok(results)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_brave_json(body: &str, limit: usize) -> Vec<SearchResult> {
     let Ok(value) = serde_json::from_str(body) else {
         return Vec::new();

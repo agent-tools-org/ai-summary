@@ -94,8 +94,7 @@ fn redact_sensitive_line(line: &str) -> String {
     let line = redact_after_marker(&line, "authorization", b":=");
     let line = redact_after_marker(&line, "x-api-key", b":=");
     let line = redact_after_marker(&line, "?key=", b"");
-    let line = redact_after_marker(&line, "api_key=", b"");
-    line
+    redact_after_marker(&line, "api_key=", b"")
 }
 
 fn redact_after_marker(line: &str, marker: &str, delimiters: &[u8]) -> String {
