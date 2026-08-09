@@ -1,8 +1,8 @@
 // Search provider integrations and URL encoding helpers.
-// Exports: UA, urlenc(), urldec(), has_gemini_cli(), search_gemini_cli(), search_gemini(), search_web().
+// Exports: UA, urlenc(), urldec(), search_gemini(), search_web().
 // Deps: reqwest blocking client, scraper selectors, crate::types.
 
-use crate::types::{SearchResult, SummarizeResult, Usage};
+use crate::types::{error_detail, SearchResult, SummarizeResult, Usage};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 
@@ -43,112 +43,12 @@ pub fn urldec(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-pub fn has_gemini_cli() -> bool {
-    std::process::Command::new("gemini")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-pub fn search_gemini_cli(query: &str, streaming: bool) -> Option<SummarizeResult> {
-    let prompt = format!(
-        "Search the web for: {}\n\n\
-         Based ONLY on search results, provide a concise factual answer. \
-         Use bullet points. Include specific source URLs. Keep under 500 words.",
-        query
-    );
-    if streaming {
-        search_gemini_cli_stream(&prompt)
-    } else {
-        search_gemini_cli_batch(&prompt)
-    }
-}
-
-fn search_gemini_cli_stream(prompt: &str) -> Option<SummarizeResult> {
-    use std::io::{BufRead, BufReader, Write};
-    let mut child = std::process::Command::new("gemini")
-        .args(["-o", "stream-json", "-p", prompt])
-        .current_dir("/tmp")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let reader = BufReader::new(stdout);
-    let mut response = String::new();
-    let out = std::io::stdout();
-    let mut out = out.lock();
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-        let json: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if json.get("type").and_then(|v| v.as_str()) == Some("message")
-            && json.get("role").and_then(|v| v.as_str()) == Some("assistant")
-        {
-            if let Some(content) = json.get("content").and_then(|v| v.as_str()) {
-                response.push_str(content);
-                let _ = out.write_all(content.as_bytes());
-                let _ = out.flush();
-            }
-        }
-    }
-    let _ = child.wait();
-    if response.is_empty() {
-        return None;
-    }
-    let footer = "\n\n---\n[ai-summary] Gemini CLI + Google Search";
-    let _ = out.write_all(footer.as_bytes());
-    let _ = out.flush();
-    let raw_estimate = 14000u64;
-    let summary_chars = response.len() as u64;
-    Some(SummarizeResult {
-        text: String::new(), // already printed
-        usage: None,
-        raw_chars: raw_estimate,
-        summary_chars,
-    })
-}
-
-fn search_gemini_cli_batch(prompt: &str) -> Option<SummarizeResult> {
-    let output = std::process::Command::new("gemini")
-        .args(["-o", "json", "-p", prompt])
-        .current_dir("/tmp")
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-    let response = json.get("response")?.as_str()?.to_string();
-    if response.is_empty() {
-        return None;
-    }
-    let raw_estimate = 14000u64;
-    let summary_chars = response.len() as u64;
-    Some(SummarizeResult {
-        text: format!("{response}\n\n---\n[ai-summary] Gemini CLI + Google Search"),
-        usage: None,
-        raw_chars: raw_estimate,
-        summary_chars,
-    })
-}
-
 pub fn search_gemini(
     client: &Client,
     query: &str,
     api_key: &str,
     model: &str,
-) -> Option<SummarizeResult> {
+) -> Result<SummarizeResult, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
@@ -171,15 +71,29 @@ pub fn search_gemini(
         .json(&payload)
         .timeout(std::time::Duration::from_secs(30))
         .send()
-        .ok()?;
+        .map_err(|error| format!("connection error: {}", error_detail(&error.to_string(), api_key)))?;
 
-    let body: serde_json::Value = resp.json().ok()?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .map_err(|error| {
+            format!(
+                "failed to read response: {}",
+                error_detail(&error.to_string(), api_key)
+            )
+        })?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {}", error_detail(&body, api_key)));
+    }
+    let body: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid JSON response: {error}"))?;
     let parts = body
-        .get("candidates")?
-        .get(0)?
-        .get("content")?
-        .get("parts")?
-        .as_array()?;
+        .get("candidates")
+        .and_then(|candidates| candidates.get(0))
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array())
+        .ok_or_else(|| "response did not contain candidate content".to_string())?;
     let text: String = parts
         .iter()
         .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
@@ -226,7 +140,7 @@ pub fn search_gemini(
         format!("\n\nSources:\n{}", sources.join("\n"))
     };
     let raw_estimate = 14000u64;
-    Some(SummarizeResult {
+    Ok(SummarizeResult {
         text: format!(
             "{text}{sources_str}\n\n---\n[ai-summary] Gemini ({model}) + Google Search | {usage_info}",
             usage_info = usage
@@ -243,32 +157,45 @@ pub fn search_gemini(
     })
 }
 
-pub fn search_web(client: &Client, query: &str, num: usize, brave_key: &str) -> Vec<SearchResult> {
-    let results = search_ddg(client, query, num);
-    if !results.is_empty() {
-        return results;
+pub fn search_web(
+    client: &Client,
+    query: &str,
+    num: usize,
+    brave_key: &str,
+) -> Result<Vec<SearchResult>, String> {
+    let ddg_reason = match search_ddg(client, query, num) {
+        Ok(results) if !results.is_empty() => return Ok(results),
+        Ok(_) => "returned no results".to_string(),
+        Err(reason) => reason,
+    };
+    if brave_key.is_empty() {
+        return Err(format!(
+            "DDG failed: {ddg_reason}; Brave Search is not configured"
+        ));
     }
-    if !brave_key.is_empty() {
-        eprintln!("[ai-summary] DDG unavailable, trying Brave Search...");
-        return search_brave(client, query, num, brave_key);
-    }
-    eprintln!("[ai-summary] DDG unavailable. Set gemini_api_key or brave_api_key in config.");
-    vec![]
+    eprintln!("[ai-summary] DDG unavailable ({ddg_reason}), trying Brave Search...");
+    search_brave(client, query, num, brave_key)
+        .map_err(|reason| format!("DDG failed: {ddg_reason}; Brave failed: {reason}"))
 }
 
-pub fn search_ddg(client: &Client, query: &str, num: usize) -> Vec<SearchResult> {
+pub fn search_ddg(client: &Client, query: &str, num: usize) -> Result<Vec<SearchResult>, String> {
     let url = format!("https://html.duckduckgo.com/html/?q={}", urlenc(query));
-    let resp = client
+    let response = client
         .get(&url)
         .header("User-Agent", UA)
         .send()
-        .ok()
-        .and_then(|response| response.text().ok())
-        .unwrap_or_default();
-    if resp.is_empty() {
-        return vec![];
+        .map_err(|error| format!("request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
     }
-    parse_ddg_html(&resp, num)
+    let body = response
+        .text()
+        .map_err(|error| format!("failed to read response: {error}"))?;
+    let results = parse_ddg_html(&body, num);
+    if results.is_empty() {
+        return Err("response contained no results".to_string());
+    }
+    Ok(results)
 }
 
 pub(crate) fn parse_ddg_html(html: &str, limit: usize) -> Vec<SearchResult> {
@@ -310,26 +237,49 @@ pub(crate) fn parse_ddg_html(html: &str, limit: usize) -> Vec<SearchResult> {
     out
 }
 
-pub fn search_brave(client: &Client, query: &str, num: usize, key: &str) -> Vec<SearchResult> {
+pub fn search_brave(
+    client: &Client,
+    query: &str,
+    num: usize,
+    key: &str,
+) -> Result<Vec<SearchResult>, String> {
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
         urlenc(query),
         num
     );
-    let body = client
+    let response = client
         .get(&url)
         .header("Accept", "application/json")
         .header("X-Subscription-Token", key)
         .timeout(std::time::Duration::from_secs(10))
         .send()
-        .ok()
-        .and_then(|response| response.text().ok())
-        .unwrap_or_default();
-    parse_brave_json(&body, num)
+        .map_err(|error| format!("request failed: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|error| format!("failed to read response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {}", error_detail(&body, key)));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| format!("invalid JSON response: {error}"))?;
+    let results = parse_brave_value(&value, num);
+    if results.is_empty() {
+        return Err("response contained no web results".to_string());
+    }
+    Ok(results)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_brave_json(body: &str, limit: usize) -> Vec<SearchResult> {
-    let value: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let Ok(value) = serde_json::from_str(body) else {
+        return Vec::new();
+    };
+    parse_brave_value(&value, limit)
+}
+
+fn parse_brave_value(value: &serde_json::Value, limit: usize) -> Vec<SearchResult> {
     value
         .get("web")
         .and_then(|web| web.get("results"))

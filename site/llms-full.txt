@@ -112,10 +112,9 @@ Config file: `~/.ai-summary/config.toml` (auto-created with `ai-summary config`)
 - **OpenAI-compatible** — Any endpoint: OpenAI, Groq, DeepSeek, etc.
 
 ### Search Backends (priority order)
-1. **Gemini CLI** — Uses locally installed `gemini` CLI with Google Search grounding
-2. **Gemini API** — Direct API call (requires GEMINI_API_KEY)
-3. **DuckDuckGo** — Free, no API key needed
-4. **Brave Search** — Requires BRAVE_API_KEY
+1. **Gemini API** — Direct API call (requires GEMINI_API_KEY)
+2. **DuckDuckGo** — Free, no API key needed
+3. **Brave Search** — Requires BRAVE_API_KEY
 
 ### Content Extraction (fallback order)
 1. **Defuddle** — Clean markdown output with site-specific extractors for YouTube, GitHub, Reddit, Twitter, HN, etc. Install with `npm install -g defuddle` (optional)

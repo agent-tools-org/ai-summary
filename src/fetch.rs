@@ -376,8 +376,7 @@ mod tests {
     }
     #[test]
     fn has_agent_browser_returns_bool() {
-        let result = has_agent_browser();
-        assert!(result == true || result == false);
+        let _: bool = has_agent_browser();
     }
 
     #[test]

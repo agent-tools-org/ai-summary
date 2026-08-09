@@ -40,11 +40,11 @@ pub struct Config {
 }
 
 fn default_openrouter_model() -> String {
-    "xiaomi/mimo-v2-flash".to_string()
+    "xiaomi/mimo-v2.5".to_string()
 }
 
 fn default_gemini_model() -> String {
-    "gemini-2.0-flash".to_string()
+    "gemini-2.5-flash".to_string()
 }
 
 fn default_max_pages() -> usize {
@@ -179,7 +179,7 @@ model = "{}"
 # Gemini + Google Search grounding (recommended, best quality)
 # Get free key at https://aistudio.google.com/apikey
 gemini_api_key = ""
-gemini_model = "gemini-2.0-flash"
+gemini_model = "gemini-2.5-flash"
 
 # Brave Search API fallback (free: https://brave.com/search/api/)
 brave_api_key = ""
@@ -194,7 +194,7 @@ max_summary_tokens = {}
 # Get key at: https://openrouter.ai/keys
 # Or run: ai-summary setup --openrouter-key YOUR_KEY
 # openrouter_api_key = ""
-# openrouter_model = "xiaomi/mimo-v2-flash"  # ~$0.05/1M tokens
+# openrouter_model = "xiaomi/mimo-v2.5"
 
 # --- Fetch fallback ---
 # Jina Reader API (free tier available: https://jina.ai/reader/)
@@ -376,6 +376,8 @@ mod tests {
             assert_eq!(cfg.model, baseline.model);
             assert_eq!(cfg.max_pages, baseline.max_pages);
             assert_eq!(cfg.max_page_chars, baseline.max_page_chars);
+            assert_eq!(cfg.gemini_model, "gemini-2.5-flash");
+            assert_eq!(cfg.openrouter_model, "xiaomi/mimo-v2.5");
         });
     }
 
@@ -444,7 +446,7 @@ jina_api_key = ""
             )
             .unwrap();
 
-            let _guards = vec![
+            let _guards = [
                 EnvGuard::set("BRAVE_API_KEY", "env-brave"),
                 EnvGuard::set("GEMINI_API_KEY", "env-gemini"),
                 EnvGuard::set("CF_ACCOUNT_ID", "env-cf-id"),
