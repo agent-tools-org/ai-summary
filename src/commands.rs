@@ -26,68 +26,80 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
     if !cli.raw && has_gemini_cli() {
         let streaming = !cli.json;
         eprintln!("Searching via Gemini CLI: {query}");
-        if let Some(result) = search_gemini_cli(query, streaming) {
-            let dur = t0.elapsed().as_secs_f64();
-            eprintln!("\nDone ({dur:.1}s)");
-            record_search(
-                query,
-                "gemini-cli",
-                1,
-                result.raw_chars,
-                result.summary_chars,
-                result.usage.as_ref(),
-                dur,
-            );
-            let tokens_saved = (result.raw_chars / 4).saturating_sub(result.summary_chars / 4);
-            if cli.json {
-                let json_val = json!({
-                    "query": query,
-                    "mode": "gemini-cli",
-                    "summary": result.text,
-                    "sources": 1,
-                    "tokens_saved": tokens_saved,
-                    "duration_secs": dur,
-                });
-                println!("{}", serde_json::to_string(&json_val).unwrap());
-            } else if !streaming {
-                println!("{}", result.text);
+        match search_gemini_cli(query, &cfg.gemini_api_key, streaming) {
+            Ok(result) => {
+                let dur = t0.elapsed().as_secs_f64();
+                eprintln!("\nDone ({dur:.1}s)");
+                record_search(
+                    query,
+                    "gemini-cli",
+                    1,
+                    result.raw_chars,
+                    result.summary_chars,
+                    result.usage.as_ref(),
+                    dur,
+                );
+                let tokens_saved =
+                    (result.raw_chars / 4).saturating_sub(result.summary_chars / 4);
+                if cli.json {
+                    let json_val = json!({
+                        "query": query,
+                        "mode": "gemini-cli",
+                        "summary": result.text,
+                        "sources": 1,
+                        "tokens_saved": tokens_saved,
+                        "duration_secs": dur,
+                    });
+                    println!("{}", serde_json::to_string(&json_val).unwrap());
+                } else if !streaming {
+                    println!("{}", result.text);
+                }
+                return;
             }
-            return;
+            Err(reason) => {
+                eprintln!(
+                    "[ai-summary] Gemini CLI failed ({reason}), trying next provider..."
+                );
+            }
         }
-        eprintln!("[ai-summary] Gemini CLI failed, trying next provider...");
     }
 
     if !cfg.gemini_api_key.is_empty() && !cli.raw {
         eprintln!("Searching via Gemini API + Google Search: {query}");
-        if let Some(result) = search_gemini(client, query, &cfg.gemini_api_key, &cfg.gemini_model) {
-            let dur = t0.elapsed().as_secs_f64();
-            eprintln!("Done ({dur:.1}s)");
-            record_search(
-                query,
-                "gemini",
-                1,
-                result.raw_chars,
-                result.summary_chars,
-                result.usage.as_ref(),
-                dur,
-            );
-            let tokens_saved = (result.raw_chars / 4).saturating_sub(result.summary_chars / 4);
-            if cli.json {
-                let json_val = json!({
-                    "query": query,
-                    "mode": "gemini",
-                    "summary": result.text,
-                    "sources": 1,
-                    "tokens_saved": tokens_saved,
-                    "duration_secs": dur,
-                });
-                println!("{}", serde_json::to_string(&json_val).unwrap());
-            } else {
-                println!("{}", result.text);
+        match search_gemini(client, query, &cfg.gemini_api_key, &cfg.gemini_model) {
+            Ok(result) => {
+                let dur = t0.elapsed().as_secs_f64();
+                eprintln!("Done ({dur:.1}s)");
+                record_search(
+                    query,
+                    "gemini",
+                    1,
+                    result.raw_chars,
+                    result.summary_chars,
+                    result.usage.as_ref(),
+                    dur,
+                );
+                let tokens_saved =
+                    (result.raw_chars / 4).saturating_sub(result.summary_chars / 4);
+                if cli.json {
+                    let json_val = json!({
+                        "query": query,
+                        "mode": "gemini",
+                        "summary": result.text,
+                        "sources": 1,
+                        "tokens_saved": tokens_saved,
+                        "duration_secs": dur,
+                    });
+                    println!("{}", serde_json::to_string(&json_val).unwrap());
+                } else {
+                    println!("{}", result.text);
+                }
+                return;
             }
-            return;
+            Err(reason) => eprintln!(
+                "[ai-summary] Gemini API failed ({reason}), falling back to DDG..."
+            ),
         }
-        eprintln!("[ai-summary] Gemini API failed, falling back to DDG...");
     }
 
     eprintln!("Searching: {query}");

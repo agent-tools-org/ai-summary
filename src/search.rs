@@ -2,7 +2,7 @@
 // Exports: UA, urlenc(), urldec(), has_gemini_cli(), search_gemini_cli(), search_gemini(), search_web().
 // Deps: reqwest blocking client, scraper selectors, crate::types.
 
-use crate::types::{SearchResult, SummarizeResult, Usage};
+use crate::types::{cli_failure, error_detail, SearchResult, SummarizeResult, Usage};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 
@@ -53,7 +53,11 @@ pub fn has_gemini_cli() -> bool {
         .unwrap_or(false)
 }
 
-pub fn search_gemini_cli(query: &str, streaming: bool) -> Option<SummarizeResult> {
+pub fn search_gemini_cli(
+    query: &str,
+    api_key: &str,
+    streaming: bool,
+) -> Result<SummarizeResult, String> {
     let prompt = format!(
         "Search the web for: {}\n\n\
          Based ONLY on search results, provide a concise factual answer. \
@@ -61,22 +65,26 @@ pub fn search_gemini_cli(query: &str, streaming: bool) -> Option<SummarizeResult
         query
     );
     if streaming {
-        search_gemini_cli_stream(&prompt)
+        search_gemini_cli_stream(&prompt, api_key)
     } else {
-        search_gemini_cli_batch(&prompt)
+        search_gemini_cli_batch(&prompt, api_key)
     }
 }
 
-fn search_gemini_cli_stream(prompt: &str) -> Option<SummarizeResult> {
-    use std::io::{BufRead, BufReader, Write};
+fn search_gemini_cli_stream(prompt: &str, api_key: &str) -> Result<SummarizeResult, String> {
+    use std::io::{BufRead, BufReader, Read, Write};
     let mut child = std::process::Command::new("gemini")
         .args(["-o", "stream-json", "-p", prompt])
         .current_dir("/tmp")
+        .env("GEMINI_API_KEY", api_key)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
+        .map_err(|error| format!("failed to start: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture stdout".to_string())?;
     let reader = BufReader::new(stdout);
     let mut response = String::new();
     let out = std::io::stdout();
@@ -100,16 +108,30 @@ fn search_gemini_cli_stream(prompt: &str) -> Option<SummarizeResult> {
             }
         }
     }
-    let _ = child.wait();
+    let stderr = child
+        .stderr
+        .take()
+        .map(|mut stream| {
+            let mut stderr = String::new();
+            let _ = stream.read_to_string(&mut stderr);
+            stderr
+        })
+        .unwrap_or_default();
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait: {error}"))?;
+    if !status.success() {
+        return Err(cli_failure(&status, &stderr, api_key));
+    }
     if response.is_empty() {
-        return None;
+        return Err("completed successfully but returned no assistant response".to_string());
     }
     let footer = "\n\n---\n[ai-summary] Gemini CLI + Google Search";
     let _ = out.write_all(footer.as_bytes());
     let _ = out.flush();
     let raw_estimate = 14000u64;
     let summary_chars = response.len() as u64;
-    Some(SummarizeResult {
+    Ok(SummarizeResult {
         text: String::new(), // already printed
         usage: None,
         raw_chars: raw_estimate,
@@ -117,25 +139,34 @@ fn search_gemini_cli_stream(prompt: &str) -> Option<SummarizeResult> {
     })
 }
 
-fn search_gemini_cli_batch(prompt: &str) -> Option<SummarizeResult> {
+fn search_gemini_cli_batch(prompt: &str, api_key: &str) -> Result<SummarizeResult, String> {
     let output = std::process::Command::new("gemini")
         .args(["-o", "json", "-p", prompt])
         .current_dir("/tmp")
-        .stderr(std::process::Stdio::null())
+        .env("GEMINI_API_KEY", api_key)
         .output()
-        .ok()?;
+        .map_err(|error| format!("failed to start: {error}"))?;
     if !output.status.success() {
-        return None;
+        return Err(cli_failure(
+            &output.status,
+            &String::from_utf8_lossy(&output.stderr),
+            api_key,
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-    let response = json.get("response")?.as_str()?.to_string();
+    let json: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("invalid JSON response: {error}"))?;
+    let response = json
+        .get("response")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "JSON response did not contain a response string".to_string())?
+        .to_string();
     if response.is_empty() {
-        return None;
+        return Err("completed successfully but returned an empty response".to_string());
     }
     let raw_estimate = 14000u64;
     let summary_chars = response.len() as u64;
-    Some(SummarizeResult {
+    Ok(SummarizeResult {
         text: format!("{response}\n\n---\n[ai-summary] Gemini CLI + Google Search"),
         usage: None,
         raw_chars: raw_estimate,
@@ -148,7 +179,7 @@ pub fn search_gemini(
     query: &str,
     api_key: &str,
     model: &str,
-) -> Option<SummarizeResult> {
+) -> Result<SummarizeResult, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
@@ -171,15 +202,29 @@ pub fn search_gemini(
         .json(&payload)
         .timeout(std::time::Duration::from_secs(30))
         .send()
-        .ok()?;
+        .map_err(|error| format!("connection error: {}", error_detail(&error.to_string(), api_key)))?;
 
-    let body: serde_json::Value = resp.json().ok()?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .map_err(|error| {
+            format!(
+                "failed to read response: {}",
+                error_detail(&error.to_string(), api_key)
+            )
+        })?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {}", error_detail(&body, api_key)));
+    }
+    let body: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid JSON response: {error}"))?;
     let parts = body
-        .get("candidates")?
-        .get(0)?
-        .get("content")?
-        .get("parts")?
-        .as_array()?;
+        .get("candidates")
+        .and_then(|candidates| candidates.get(0))
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array())
+        .ok_or_else(|| "response did not contain candidate content".to_string())?;
     let text: String = parts
         .iter()
         .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
@@ -226,7 +271,7 @@ pub fn search_gemini(
         format!("\n\nSources:\n{}", sources.join("\n"))
     };
     let raw_estimate = 14000u64;
-    Some(SummarizeResult {
+    Ok(SummarizeResult {
         text: format!(
             "{text}{sources_str}\n\n---\n[ai-summary] Gemini ({model}) + Google Search | {usage_info}",
             usage_info = usage

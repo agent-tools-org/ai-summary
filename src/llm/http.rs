@@ -5,7 +5,7 @@
 use reqwest::blocking::Client;
 
 use crate::stats::fmtn;
-use crate::types::{ChatResponse, SummarizeResult, Usage};
+use crate::types::{error_detail, ChatResponse, SummarizeResult, Usage};
 
 pub(super) struct HttpSummaryRequest<'a> {
     pub api_url: &'a str,
@@ -43,7 +43,10 @@ pub(super) fn summarize_http(client: &Client, input: HttpSummaryRequest<'_>) -> 
     match req.timeout(std::time::Duration::from_secs(120)).send() {
         Ok(resp) => parse_response(resp, raw_chars, &input),
         Err(error) => SummarizeResult {
-            text: format!("[ai-summary] Connection error: {error}"),
+            text: format!(
+                "[ai-summary] Connection error: {}",
+                error_detail(&error.to_string(), input.api_key)
+            ),
             usage: None,
             raw_chars,
             summary_chars: 0,
@@ -57,7 +60,7 @@ fn parse_response(
     input: &HttpSummaryRequest<'_>,
 ) -> SummarizeResult {
     if !resp.status().is_success() {
-        return parse_http_error(resp, raw_chars);
+        return parse_http_error(resp, raw_chars, input.api_key);
     }
     if input.streaming {
         super::stream::parse_streaming_response(
@@ -92,42 +95,20 @@ fn user_message(prompt: &str, content: &str) -> String {
     )
 }
 
-fn parse_http_error(resp: reqwest::blocking::Response, raw_chars: u64) -> SummarizeResult {
+fn parse_http_error(
+    resp: reqwest::blocking::Response,
+    raw_chars: u64,
+    api_key: &str,
+) -> SummarizeResult {
     let status = resp.status();
     let body = resp.text().unwrap_or_default();
-    let detail = extract_error_detail(&body);
+    let detail = error_detail(&body, api_key);
     SummarizeResult {
         text: format!("[ai-summary] HTTP {status}: {detail}"),
         usage: None,
         raw_chars,
         summary_chars: 0,
     }
-}
-
-fn extract_error_detail(body: &str) -> String {
-    let fallback = body.trim();
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(message) = nested_error_message(&value) {
-            return truncate_error(message);
-        }
-    }
-    if fallback.is_empty() {
-        return "empty response body".to_string();
-    }
-    truncate_error(fallback)
-}
-
-fn nested_error_message(value: &serde_json::Value) -> Option<&str> {
-    value
-        .get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(|message| message.as_str())
-        .or_else(|| value.get("message").and_then(|message| message.as_str()))
-}
-
-fn truncate_error(message: &str) -> String {
-    const MAX_ERROR_CHARS: usize = 500;
-    message.chars().take(MAX_ERROR_CHARS).collect()
 }
 
 fn parse_json_response(
@@ -204,6 +185,14 @@ mod tests {
     #[test]
     fn extracts_nested_provider_error_message() {
         let body = r#"{"error":{"message":"model not found"}}"#;
-        assert_eq!(extract_error_detail(body), "model not found");
+        assert_eq!(error_detail(body, ""), "model not found");
+    }
+
+    #[test]
+    fn truncates_and_redacts_http_error_detail() {
+        let body = format!("{{\"message\":\"{} secret-key\"}}", "x".repeat(300));
+        let detail = error_detail(&body, "secret-key");
+        assert!(detail.len() <= 240);
+        assert!(!detail.contains("secret-key"));
     }
 }

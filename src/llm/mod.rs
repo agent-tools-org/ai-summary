@@ -14,7 +14,7 @@ use crate::types::SummarizeResult;
 use http::HttpSummaryRequest;
 
 const OPENROUTER_API_URL: &str = "https://openrouter.ai/api";
-const OPENCODE_MODEL: &str = "opencode/nemotron-3-super-free";
+const OPENCODE_MODEL: &str = "opencode/nemotron-3-ultra-free";
 
 pub(crate) fn has_opencode() -> bool {
     opencode::has_opencode()
@@ -69,7 +69,10 @@ fn try_openrouter(
     if result.summary_chars > 0 {
         return Some(result);
     }
-    eprintln!("[ai-summary] OpenRouter failed, trying fallback...");
+    eprintln!(
+        "[ai-summary] OpenRouter failed: {}; trying fallback...",
+        result.text
+    );
     None
 }
 
@@ -86,10 +89,12 @@ fn try_opencode(
         .strip_prefix("opencode/")
         .unwrap_or(OPENCODE_MODEL);
     eprintln!("Summarizing with {model_short} (opencode, free)...");
-    if let Some(result) = opencode::summarize_opencode(OPENCODE_MODEL, prompt, content, streaming) {
-        return Some(result);
+    match opencode::summarize_opencode(OPENCODE_MODEL, prompt, content, streaming) {
+        Ok(result) => return Some(result),
+        Err(reason) => eprintln!(
+            "[ai-summary] opencode failed: {reason}; falling back to {fallback_model}..."
+        ),
     }
-    eprintln!("[ai-summary] opencode failed, falling back to {fallback_model}...");
     None
 }
 

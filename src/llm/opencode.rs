@@ -2,10 +2,10 @@
 //! Exports: has_opencode(), summarize_opencode().
 //! Deps: opencode executable, stats formatting, response cleanup.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 
 use crate::stats::fmtn;
-use crate::types::{SummarizeResult, Usage};
+use crate::types::{cli_failure, SummarizeResult, Usage};
 
 pub(crate) fn has_opencode() -> bool {
     std::process::Command::new("opencode")
@@ -22,7 +22,7 @@ pub(super) fn summarize_opencode(
     prompt: &str,
     content: &str,
     streaming: bool,
-) -> Option<SummarizeResult> {
+) -> Result<SummarizeResult, String> {
     let raw_chars = content.len() as u64;
     let full_prompt = opencode_prompt(prompt, content);
     if streaming {
@@ -51,16 +51,19 @@ fn opencode_prompt(prompt: &str, content: &str) -> String {
     )
 }
 
-fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Option<SummarizeResult> {
+fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Result<SummarizeResult, String> {
     let mut child = std::process::Command::new("opencode")
         .args(["run", "-m", model, "--dir", "/tmp", "--format", "json", prompt])
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .ok()?;
+        .map_err(|error| format!("failed to start: {error}"))?;
 
-    let stdout = child.stdout.take()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture stdout".to_string())?;
     let mut reader = BufReader::new(stdout);
     let out = std::io::stdout();
     let mut out = out.lock();
@@ -69,32 +72,48 @@ fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Option<Summariz
     let mut line = String::new();
     while read_opencode_line(&mut reader, &mut line, &mut text_parts, &mut usage, &mut out) {}
 
-    let status = child.wait().ok()?;
+    let stderr = child
+        .stderr
+        .take()
+        .map(|mut stream| {
+            let mut stderr = String::new();
+            let _ = stream.read_to_string(&mut stderr);
+            stderr
+        })
+        .unwrap_or_default();
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait: {error}"))?;
     if !status.success() {
-        return None;
+        return Err(cli_failure(&status, &stderr, ""));
     }
-    let result = build_result(model, text_parts.join(""), usage, raw_chars, true)?;
+    let result = build_result(model, text_parts.join(""), usage, raw_chars, true)
+        .ok_or_else(|| "completed successfully but returned no response".to_string())?;
     write!(out, "{}", result.text).ok();
     out.flush().ok();
-    Some(SummarizeResult {
+    Ok(SummarizeResult {
         text: String::new(),
         ..result
     })
 }
 
-fn batch_opencode(model: &str, prompt: &str, raw_chars: u64) -> Option<SummarizeResult> {
+fn batch_opencode(model: &str, prompt: &str, raw_chars: u64) -> Result<SummarizeResult, String> {
     let output = std::process::Command::new("opencode")
         .args(["run", "-m", model, "--dir", "/tmp", "--format", "json", prompt])
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
         .output()
-        .ok()?;
+        .map_err(|error| format!("failed to start: {error}"))?;
     if !output.status.success() {
-        return None;
+        return Err(cli_failure(
+            &output.status,
+            &String::from_utf8_lossy(&output.stderr),
+            "",
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let (response, usage) = parse_opencode_json_lines(&stdout);
     build_result(model, response, usage, raw_chars, false)
+        .ok_or_else(|| "completed successfully but returned no response".to_string())
 }
 
 fn read_opencode_line<R: BufRead, W: Write>(
