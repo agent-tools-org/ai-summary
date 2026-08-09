@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased
+## v2.13.0 (2026-08-09)
+
+Every backend was failing at once, and every failure was reported as the same generic
+message, so four unrelated causes looked like one outage.
+
+### Fixed
+- Update dead model identifiers: OpenRouter `xiaomi/mimo-v2-flash` (deprecated) to
+  `xiaomi/mimo-v2.5`, Gemini `gemini-2.0-flash` (retired) to `gemini-2.5-flash`, and the
+  hardcoded opencode model `nemotron-3-super-free` (removed upstream) to
+  `nemotron-3-ultra-free`.
+- Report the real reason when a backend falls through — HTTP status and body for API
+  backends, exit code and stderr for subprocess backends — instead of a bare
+  "X failed, trying fallback...". DuckDuckGo and Brave now carry a reason too.
+- Drain the opencode subprocess stderr concurrently with stdout. Reading it only after
+  stdout was exhausted could deadlock when the child filled the stderr pipe buffer.
+- Redact `Bearer`, `Authorization`, `X-Api-Key`, `?key=`, and `api_key=` from error output
+  by pattern, rather than only an exact match of the configured secret.
+
+### Removed
+- The Gemini CLI search tier. It authenticated with the same API key as the Gemini API tier
+  directly below it, so it added a failing step and several seconds of latency without
+  buying anything. The search chain is now Gemini API, then DuckDuckGo, then Brave.
 
 ### Changed
 - Reduce default dependency surface by replacing `atty` with `std::io::IsTerminal`.

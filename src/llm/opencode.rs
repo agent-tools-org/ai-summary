@@ -79,17 +79,12 @@ fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Result<Summariz
     let mut line = String::new();
     while read_opencode_line(&mut reader, &mut line, &mut text_parts, &mut usage, &mut out) {}
 
-    let stderr = stderr_thread
-        .map(|thread| {
-            thread
-                .join()
-                .map_err(|_| "failed to read stderr".to_string())
-        })
-        .transpose()?
-        .unwrap_or_default();
+    // Reap the child before propagating a join failure; Child has no Drop reaper.
+    let stderr = stderr_thread.and_then(|thread| thread.join().ok());
     let status = child
         .wait()
         .map_err(|error| format!("failed to wait: {error}"))?;
+    let stderr = stderr.unwrap_or_default();
     if !status.success() {
         return Err(cli_failure(&status, &stderr, ""));
     }

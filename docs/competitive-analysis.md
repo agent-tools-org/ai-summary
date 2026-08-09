@@ -103,7 +103,7 @@ ai-summary is a **compression proxy for AI coding agents** — it replaces 3-5 C
 
 1. **E2E pipeline** — One command: search → fetch → extract → summarize. No competitor does this.
 2. **Compression ratio** — 13x smaller than Jina, direct answer vs raw dump.
-3. **Zero cost** — Gemini CLI + opencode = completely free.
+3. **Zero cost** — opencode's free models carry the summarize path at no charge.
 4. **Passive savings** — PostToolUse hooks work without user intervention.
 5. **Stats/ROI tracking** — Only tool that quantifies savings.
 
