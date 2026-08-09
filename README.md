@@ -63,7 +63,7 @@ Requirements: a summarization backend (opencode CLI recommended — free). Rust 
 # Generate config file
 ai-summary config
 
-# Search (uses Gemini CLI > Gemini API > DDG > Brave)
+# Search (uses Gemini API > DDG > Brave)
 ai-summary "what is the latest Rust version"
 
 # Fetch URLs and summarize
@@ -112,7 +112,7 @@ model = "Qwen3.5-9B-MLX-4bit"
 
 # Search provider — Gemini + Google Search (recommended)
 gemini_api_key = ""  # Free: https://aistudio.google.com/apikey
-gemini_model = "gemini-2.0-flash"
+gemini_model = "gemini-2.5-flash"
 
 # Brave Search fallback (free: https://brave.com/search/api/)
 brave_api_key = ""
@@ -122,7 +122,7 @@ max_page_chars = 4000
 max_summary_tokens = 1024
 ```
 
-Search priority: **Gemini CLI** > **Gemini API** > **DuckDuckGo** > **Brave**
+Search priority: **Gemini API** > **DuckDuckGo** > **Brave**
 
 Environment variables: `GEMINI_API_KEY`, `BRAVE_API_KEY`, `AI_SUMMARY_API_URL`, `AI_SUMMARY_API_KEY`, `AI_SUMMARY_MODEL`.
 

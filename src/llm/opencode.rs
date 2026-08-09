@@ -64,6 +64,13 @@ fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Result<Summariz
         .stdout
         .take()
         .ok_or_else(|| "failed to capture stdout".to_string())?;
+    let stderr_thread = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut stderr = String::new();
+            let _ = stream.read_to_string(&mut stderr);
+            stderr
+        })
+    });
     let mut reader = BufReader::new(stdout);
     let out = std::io::stdout();
     let mut out = out.lock();
@@ -72,14 +79,13 @@ fn stream_opencode(model: &str, prompt: &str, raw_chars: u64) -> Result<Summariz
     let mut line = String::new();
     while read_opencode_line(&mut reader, &mut line, &mut text_parts, &mut usage, &mut out) {}
 
-    let stderr = child
-        .stderr
-        .take()
-        .map(|mut stream| {
-            let mut stderr = String::new();
-            let _ = stream.read_to_string(&mut stderr);
-            stderr
+    let stderr = stderr_thread
+        .map(|thread| {
+            thread
+                .join()
+                .map_err(|_| "failed to read stderr".to_string())
         })
+        .transpose()?
         .unwrap_or_default();
     let status = child
         .wait()

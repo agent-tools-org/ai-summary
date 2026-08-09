@@ -84,22 +84,51 @@ fn redact_sensitive(text: &str, secret: &str) -> String {
         text.replace(secret, "[redacted]")
     };
     text.lines()
-        .map(redact_authorization_line)
+        .map(redact_sensitive_line)
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn redact_authorization_line(line: &str) -> String {
+fn redact_sensitive_line(line: &str) -> String {
+    let line = redact_after_marker(line, "bearer", b"");
+    let line = redact_after_marker(&line, "authorization", b":=");
+    let line = redact_after_marker(&line, "x-api-key", b":=");
+    let line = redact_after_marker(&line, "?key=", b"");
+    let line = redact_after_marker(&line, "api_key=", b"");
+    line
+}
+
+fn redact_after_marker(line: &str, marker: &str, delimiters: &[u8]) -> String {
     let lowercase = line.to_ascii_lowercase();
-    let Some(start) = lowercase.find("authorization") else {
+    let Some(start) = lowercase.find(marker) else {
         return line.to_string();
     };
-    let suffix = &lowercase[start..];
-    let delimiter = suffix.find(':').or_else(|| suffix.find('='));
-    let Some(delimiter) = delimiter else {
-        return line.to_string();
+    let mut value_start = start + marker.len();
+    if !delimiters.is_empty() {
+        let Some(delimiter) = lowercase[value_start..]
+            .bytes()
+            .position(|byte| delimiters.contains(&byte))
+        else {
+            return line.to_string();
+        };
+        value_start += delimiter + 1;
     };
-    format!("{} [redacted]", &line[..start + delimiter + 1])
+    value_start += line[value_start..]
+        .char_indices()
+        .find(|(_, character)| !character.is_whitespace())
+        .map(|(index, _)| index)
+        .unwrap_or(line[value_start..].len());
+    let value_end = line[value_start..]
+        .char_indices()
+        .find(|(_, character)| {
+            character.is_whitespace() || matches!(character, '&' | '"' | '\'' | ',' | ';')
+        })
+        .map(|(index, _)| value_start + index)
+        .unwrap_or(line.len());
+    if value_start == value_end {
+        return line.to_string();
+    }
+    format!("{}[redacted]{}", &line[..value_start], &line[value_end..])
 }
 
 fn truncate_error(message: &str) -> String {
@@ -120,6 +149,18 @@ mod tests {
         assert!(!detail.contains("hidden-header"));
         assert!(!detail.contains("hidden-key"));
         assert!(detail.contains("Authorization: [redacted]"));
+    }
+
+    #[test]
+    fn error_detail_redacts_secret_patterns_without_a_secret_argument() {
+        let detail = error_detail(
+            "?key=query-secret&next=1 api_key=api-secret X-Api-Key: header-secret Bearer token-secret",
+            "",
+        );
+        assert!(!detail.contains("query-secret"));
+        assert!(!detail.contains("api-secret"));
+        assert!(!detail.contains("header-secret"));
+        assert!(!detail.contains("token-secret"));
     }
 
     #[cfg(unix)]

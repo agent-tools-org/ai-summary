@@ -12,7 +12,7 @@ use crate::cache;
 use crate::config::Config;
 use crate::fetch::fetch_pages_parallel;
 use crate::llm::llm_summarize;
-use crate::search::{has_gemini_cli, search_gemini, search_gemini_cli, search_web};
+use crate::search::{search_gemini, search_web};
 use crate::stats::{fmtn, record_search};
 use crate::terminal;
 use crate::types::SummarizeResult;
@@ -22,47 +22,6 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
     let t0 = Instant::now();
     let use_cf = cli.cf && !cfg.cf_account_id.is_empty() && !cfg.cf_api_token.is_empty();
     let use_browser = cli.browser && !use_cf;
-
-    if !cli.raw && has_gemini_cli() {
-        let streaming = !cli.json;
-        eprintln!("Searching via Gemini CLI: {query}");
-        match search_gemini_cli(query, &cfg.gemini_api_key, streaming) {
-            Ok(result) => {
-                let dur = t0.elapsed().as_secs_f64();
-                eprintln!("\nDone ({dur:.1}s)");
-                record_search(
-                    query,
-                    "gemini-cli",
-                    1,
-                    result.raw_chars,
-                    result.summary_chars,
-                    result.usage.as_ref(),
-                    dur,
-                );
-                let tokens_saved =
-                    (result.raw_chars / 4).saturating_sub(result.summary_chars / 4);
-                if cli.json {
-                    let json_val = json!({
-                        "query": query,
-                        "mode": "gemini-cli",
-                        "summary": result.text,
-                        "sources": 1,
-                        "tokens_saved": tokens_saved,
-                        "duration_secs": dur,
-                    });
-                    println!("{}", serde_json::to_string(&json_val).unwrap());
-                } else if !streaming {
-                    println!("{}", result.text);
-                }
-                return;
-            }
-            Err(reason) => {
-                eprintln!(
-                    "[ai-summary] Gemini CLI failed ({reason}), trying next provider..."
-                );
-            }
-        }
-    }
 
     if !cfg.gemini_api_key.is_empty() && !cli.raw {
         eprintln!("Searching via Gemini API + Google Search: {query}");
@@ -103,10 +62,16 @@ pub fn run_search(cli: &Cli, cfg: &Config, client: &Client, query: &str) {
     }
 
     eprintln!("Searching: {query}");
-    let results = search_web(client, query, 6, &cfg.brave_api_key);
+    let results = match search_web(client, query, 6, &cfg.brave_api_key) {
+        Ok(results) => results,
+        Err(reason) => {
+            eprintln!("No search results found: {reason}");
+            std::process::exit(2);
+        }
+    };
     let t1 = Instant::now();
     if results.is_empty() {
-        eprintln!("No search results found.");
+        eprintln!("No search results found: search providers returned no results.");
         std::process::exit(2);
     }
     eprintln!(
