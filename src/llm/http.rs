@@ -1,26 +1,28 @@
-//! OpenAI-compatible HTTP summarization client.
-//! Exports: summarize_http().
-//! Deps: reqwest blocking client, Config-derived params, stats formatting, response types.
+//! Issue OpenAI-compatible summary requests and decode complete responses.
+//! Uses the summary client's no-redirect policy and SSE response parser.
 
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, Url};
 
-use crate::stats::fmtn;
-use crate::types::{error_detail, ChatResponse, SummarizeResult, Usage};
+use super::{Provider, Summary};
+use crate::types::{error_detail, ChatResponse};
 
 pub(super) struct HttpSummaryRequest<'a> {
-    pub api_url: &'a str,
-    pub api_key: &'a str,
+    pub provider: Provider,
+    pub url: &'a str,
+    pub key: &'a str,
     pub model: &'a str,
-    pub model_display: &'a str,
     pub max_tokens: u32,
-    pub cost_label: &'a str,
     pub prompt: &'a str,
     pub content: &'a str,
     pub streaming: bool,
+    pub timeout: std::time::Duration,
 }
 
-pub(super) fn summarize_http(client: &Client, input: HttpSummaryRequest<'_>) -> SummarizeResult {
-    let raw_chars = input.content.len() as u64;
+pub(super) fn summarize_http(
+    client: &Client,
+    input: HttpSummaryRequest<'_>,
+) -> Result<Summary, String> {
+    let url = endpoint(input.url)?;
     let payload = serde_json::json!({
         "model": input.model,
         "messages": [
@@ -32,46 +34,56 @@ pub(super) fn summarize_http(client: &Client, input: HttpSummaryRequest<'_>) -> 
         "chat_template_kwargs": {"enable_thinking": false},
         "stream": input.streaming
     });
-
-    let mut req = client
-        .post(format!("{}/v1/chat/completions", input.api_url))
-        .json(&payload);
-    if !input.api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", input.api_key));
+    let mut request = client.post(url).json(&payload);
+    if !input.key.is_empty() {
+        request = request.bearer_auth(input.key);
     }
-
-    match req.timeout(std::time::Duration::from_secs(120)).send() {
-        Ok(resp) => parse_response(resp, raw_chars, &input),
-        Err(error) => SummarizeResult {
-            text: format!(
-                "[ai-summary] Connection error: {}",
-                error_detail(&error.to_string(), input.api_key)
-            ),
-            usage: None,
-            raw_chars,
-            summary_chars: 0,
-        },
-    }
-}
-
-fn parse_response(
-    resp: reqwest::blocking::Response,
-    raw_chars: u64,
-    input: &HttpSummaryRequest<'_>,
-) -> SummarizeResult {
-    if !resp.status().is_success() {
-        return parse_http_error(resp, raw_chars, input.api_key);
+    let response = request
+        .timeout(input.timeout)
+        .send()
+        .map_err(|error| format!("connection error: {}", error.without_url()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body =
+            String::from_utf8_lossy(&crate::read_limit(response, 64 * 1024).unwrap_or_default())
+                .into_owned();
+        return Err(format!("HTTP {status}: {}", error_detail(&body, input.key)));
     }
     if input.streaming {
-        super::stream::parse_streaming_response(
-            resp,
-            raw_chars,
-            input.model_display,
-            input.cost_label,
-        )
-    } else {
-        parse_json_response(resp, raw_chars, input.model_display, input.cost_label)
+        let (text, usage) =
+            super::stream::parse_streaming_response(&*crate::read_limit(response, 1024 * 1024)?)
+                .map_err(|error| error_detail(&error, input.key))?;
+        return Summary::new(&text, usage, input.provider, input.model);
     }
+    let response: ChatResponse = serde_json::from_slice(&crate::read_limit(response, 1024 * 1024)?)
+        .map_err(|_| "invalid summary JSON")?;
+    let text = response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.as_str())
+        .unwrap_or_default();
+    Summary::new(text, response.usage, input.provider, input.model)
+}
+
+fn endpoint(base: &str) -> Result<Url, String> {
+    let mut url = Url::parse(base).map_err(|_| "invalid summary API URL")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("invalid summary API URL".into());
+    }
+    let path = url.path().trim_end_matches('/');
+    let endpoint = if path.ends_with("/v1") {
+        format!("{path}/chat/completions")
+    } else {
+        format!("{path}/v1/chat/completions")
+    };
+    url.set_path(&endpoint);
+    Ok(url)
 }
 
 fn system_prompt() -> &'static str {
@@ -92,89 +104,6 @@ fn user_message(prompt: &str, content: &str) -> String {
     }
     format!(
         "Question: {prompt}\n\nContent:\n\n---\n\n{content}\n\n---\n\nProvide a concise summary."
-    )
-}
-
-fn parse_http_error(
-    resp: reqwest::blocking::Response,
-    raw_chars: u64,
-    api_key: &str,
-) -> SummarizeResult {
-    let status = resp.status();
-    let body = resp.text().unwrap_or_default();
-    let detail = error_detail(&body, api_key);
-    SummarizeResult {
-        text: format!("[ai-summary] HTTP {status}: {detail}"),
-        usage: None,
-        raw_chars,
-        summary_chars: 0,
-    }
-}
-
-fn parse_json_response(
-    resp: reqwest::blocking::Response,
-    raw_chars: u64,
-    model_display: &str,
-    cost_label: &str,
-) -> SummarizeResult {
-    match resp.json::<ChatResponse>() {
-        Ok(response) => json_summary(response, raw_chars, model_display, cost_label),
-        Err(error) => SummarizeResult {
-            text: format!("[ai-summary] Parse error: {error}"),
-            usage: None,
-            raw_chars,
-            summary_chars: 0,
-        },
-    }
-}
-
-fn json_summary(
-    response: ChatResponse,
-    raw_chars: u64,
-    model_display: &str,
-    cost_label: &str,
-) -> SummarizeResult {
-    let raw = response
-        .choices
-        .first()
-        .map(|choice| choice.message.content.clone())
-        .unwrap_or_default();
-    let content = super::clean::strip_thinking(&raw);
-    let summary_chars = content.len() as u64;
-    let footer = summary_footer(
-        model_display,
-        cost_label,
-        raw_chars,
-        summary_chars,
-        response.usage.as_ref(),
-    );
-    SummarizeResult {
-        text: format!("{content}{footer}"),
-        usage: response.usage,
-        raw_chars,
-        summary_chars,
-    }
-}
-
-pub(super) fn summary_footer(
-    model_display: &str,
-    cost_label: &str,
-    raw_chars: u64,
-    summary_chars: u64,
-    usage: Option<&Usage>,
-) -> String {
-    let usage_info = usage
-        .map(|usage| {
-            format!(
-                "tokens: {}+{} ({})",
-                usage.prompt_tokens, usage.completion_tokens, cost_label
-            )
-        })
-        .unwrap_or_default();
-    format!(
-        "\n\n---\n[ai-summary] {model_display} | {usage_info} | {raw_chars_fmt} -> {summary_chars_fmt}",
-        raw_chars_fmt = fmtn(raw_chars),
-        summary_chars_fmt = fmtn(summary_chars),
     )
 }
 

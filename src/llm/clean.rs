@@ -7,6 +7,9 @@ pub fn strip_thinking(s: &str) -> String {
     if let Some(index) = s.find("</think>") {
         return s[index + 8..].trim().to_string();
     }
+    if s.starts_with("<think>") {
+        return String::new();
+    }
     let lines: Vec<&str> = s.lines().collect();
     let starters = [
         "Thinking Process",

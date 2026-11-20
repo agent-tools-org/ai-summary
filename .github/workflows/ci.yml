@@ -8,11 +8,24 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            toolchain: "1.89"
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo clippy --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - run: python3 tests/local_smoke.py target/release/ai-summary

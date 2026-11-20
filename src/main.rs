@@ -3,25 +3,29 @@
 // Deps: crate modules for config, commands, crawl, compress, stats; clap; reqwest.
 
 mod bench;
-mod commands;
 mod cache;
+mod cli;
+mod cloudflare;
+mod commands;
 mod compress;
 mod config;
 mod crawl;
+mod doctor;
 mod fetch;
 mod fetch_utils;
+mod init;
 mod llm;
 mod search;
 mod stats;
 mod stats_history;
+mod storage;
+mod subprocess;
 mod terminal;
+mod text;
 mod types;
 mod wrap;
-mod init;
 
-use clap::{Parser, Subcommand};
 use reqwest::blocking::Client;
-use std::fs;
 use std::io::Read;
 
 use crate::bench::run_bench;
@@ -29,238 +33,75 @@ use crate::commands::{run_fetch, run_github, run_repo, run_search, run_summarize
 use crate::compress::run_compress;
 use crate::config::{print_config, resolve_config, run_setup};
 use crate::crawl::run_crawl;
-use crate::stats::{print_stats, print_stats_json, stats_path};
-use crate::wrap::run_wrap;
 use crate::init::run_init;
+use crate::stats::{print_stats, print_stats_json};
+use crate::wrap::run_wrap;
 
-#[derive(Parser)]
-#[command(
-    name = "ai-summary",
-    version,
-    about = "Web search & summarization with local LLM. Save tokens, search smarter.",
-    long_about = "Search the web, fetch pages, or pipe text — summarize with a local LLM.\n\n\
-        Examples:\n  \
-        ai-summary what is Rust              Search + summarize\n  \
-        ai-summary fetch <urls> -p <q>       Fetch URLs + summarize\n  \
-        echo text | ai-summary sum <prompt>  Summarize stdin\n  \
-        ai-summary github owner/repo -p <q>  Read GitHub code\n\n\
-        Designed for Claude Code and AI coding agents to reduce token consumption."
-)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Commands,
-    #[arg(long, global = true)]
-    pub deep: bool,
-    #[arg(long, global = true)]
-    pub raw: bool,
-    #[arg(long, global = true)]
-    pub cf: bool,
-    #[arg(long, global = true)]
-    pub browser: bool,
-    #[arg(long, env = "AI_SUMMARY_API_URL", global = true)]
-    pub api_url: Option<String>,
-    #[arg(long, env = "AI_SUMMARY_API_KEY", global = true)]
-    pub api_key: Option<String>,
-    #[arg(long, env = "AI_SUMMARY_MODEL", global = true)]
-    pub model: Option<String>,
-    /// Bypass summary cache
-    #[arg(long, global = true)]
-    pub no_cache: bool,
-    /// Doc-aware mode (reserved for future)
-    #[arg(long, global = true)]
-    pub doc: bool,
-    /// Output structured JSON metadata
-    #[arg(long, global = true)]
-    pub metadata: bool,
-    #[arg(long, global = true)]
-    pub json: bool,
-}
-
-#[derive(Subcommand)]
-pub enum Commands {
-    /// Search the web and summarize results
-    #[command(visible_alias = "s")]
-    Search {
-        query: Vec<String>,
-    },
-    #[command(visible_alias = "sum")]
-    Summarize {
-        prompt: Vec<String>,
-    },
-    Fetch {
-        urls: Vec<String>,
-        #[arg(short, long)]
-        prompt: Option<String>,
-    },
-    Compress {
-        #[arg(short, long, default_value = "4000")]
-        max_chars: usize,
-        #[arg(short, long)]
-        source: Option<String>,
-    },
-    /// Run a command, compress large passing test output, preserve exit code.
-    /// Used by PreToolUse hook to rewrite test commands.
-    Wrap {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
-    Stats,
-    ResetStats,
-    /// Clear the summary cache
-    ResetCache,
-    Config,
-    /// Benchmark fetch + summarization on a set of test URLs.
-    Bench,
-    Crawl {
-        url: String,
-        #[arg(short, long)]
-        prompt: Option<String>,
-        #[arg(short, long, default_value = "10")]
-        limit: u32,
-        #[arg(short, long, default_value = "2")]
-        depth: u32,
-    },
-    /// Search GitHub code or read files from repos via gh CLI.
-    Github {
-        /// Search query, or owner/repo[/path]
-        #[arg(num_args = 1..)]
-        args: Vec<String>,
-        /// Restrict search to a specific repo (owner/repo)
-        #[arg(short, long)]
-        repo: Option<String>,
-        /// Filter by programming language
-        #[arg(short, long)]
-        language: Option<String>,
-        /// Question to answer about the code
-        #[arg(short, long)]
-        prompt: Option<String>,
-    },
-    /// Pack a remote GitHub repo with repomix and summarize it.
-    Repo {
-        /// GitHub URL or owner/repo shorthand
-        repo: String,
-        #[arg(short, long)]
-        prompt: Option<String>,
-        /// Glob patterns for repomix --include (e.g. "src/**/*.rs,*.toml")
-        #[arg(short = 'I', long)]
-        include: Option<String>,
-    },
-    #[command(about = "Install Claude Code integration (prompt + hook)")]
-    Init {
-        #[arg(long)]
-        uninstall: bool,
-        /// Also install repomix globally (npm install -g repomix)
-        #[arg(long)]
-        with_repomix: bool,
-    },
-    #[command(about = "Configure LLM backend (OpenRouter API key, etc.)")]
-    Setup {
-        /// Set OpenRouter API key for direct API calls (no subprocess overhead)
-        #[arg(long)]
-        openrouter_key: Option<String>,
-    },
-}
+use cli::{Cli, Commands};
+use config::Config;
 
 fn main() {
-    // Try clap parse first; if it fails and args look like a search query, handle it
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(e) => {
-            // If user passed bare words (no subcommand), treat as search
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            if !args.is_empty() && !args[0].starts_with('-') && e.kind() == clap::error::ErrorKind::InvalidSubcommand {
-                // Re-parse as "search <args>"
-                let mut new_args = vec!["ai-summary".to_string(), "search".to_string()];
-                new_args.extend(args);
-                match Cli::try_parse_from(new_args) {
-                    Ok(cli) => cli,
-                    Err(_) => e.exit(),
-                }
-            } else {
-                e.exit();
-            }
+    let cli = cli::parse();
+    match &cli.command {
+        Commands::Stats if cli.json => print_stats_json(),
+        Commands::Stats => print_stats(),
+        Commands::ResetStats => {
+            stats_history::reset_stats().unwrap_or_else(|error| commands::fail(1, &error));
+            println!("Statistics reset.");
         }
-    };
+        Commands::ResetCache => println!("Cleared {} cached entries.", cache::cache_clear()),
+        Commands::Config => configuration_or_exit(print_config()),
+        Commands::Doctor { check_hosted } => {
+            let cfg = configuration_or_exit(resolve_config(&cli));
+            doctor::run(&cli, &cfg, *check_hosted);
+        }
+        Commands::Init {
+            uninstall,
+            with_repomix,
+        } => run_init(*uninstall, *with_repomix),
+        Commands::Setup { openrouter_key } => {
+            configuration_or_exit(run_setup(openrouter_key.as_deref()))
+        }
+        Commands::Wrap { command } => run_wrap(command),
+        Commands::Compress { max_chars, source } => run_compress(*max_chars, source.as_deref()),
+        Commands::Summarize { prompt } => {
+            let cfg = if cli.raw {
+                Config::default()
+            } else {
+                configuration_or_exit(resolve_config(&cli))
+            };
+            run_summarize(&cli, &cfg, &prompt.join(" "));
+        }
+        _ => run_acquisition(&cli, &configuration_or_exit(resolve_config(&cli))),
+    }
+}
 
-    let cfg = resolve_config(&cli);
+fn run_acquisition(cli: &Cli, cfg: &Config) {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("HTTP client");
-
     match &cli.command {
         Commands::Search { query } => {
-            let q = query.join(" ");
-            if q.is_empty() {
+            let query = query.join(" ");
+            if query.is_empty() {
                 eprintln!("Usage: ai-summary <query>");
                 std::process::exit(1);
             }
-            run_search(&cli, &cfg, &client, &q);
-        }
-        Commands::Stats => {
-            if cli.json {
-                print_stats_json();
-            } else {
-                print_stats();
-            }
-        }
-        Commands::ResetStats => {
-            let _ = fs::remove_file(stats_path());
-            println!("Statistics reset.");
-        }
-        Commands::ResetCache => {
-            let count = cache::cache_clear();
-            println!("Cleared {count} cached entries.");
-        }
-        Commands::Config => {
-            print_config();
-        }
-        Commands::Init { uninstall, with_repomix } => {
-            run_init(*uninstall, *with_repomix);
-        }
-        Commands::Setup { openrouter_key } => {
-            run_setup(openrouter_key.as_deref());
-        }
-        Commands::Wrap { command } => {
-            run_wrap(command);
-        }
-        Commands::Compress { max_chars, source } => {
-            run_compress(*max_chars, source.as_deref());
-        }
-        Commands::Summarize { prompt } => {
-            run_summarize(&cli, &cfg, &client, &prompt.join(" "));
+            run_search(cli, cfg, &client, &query);
         }
         Commands::Fetch { urls, prompt } => {
-            let urls = if urls.is_empty() && !terminal::is_stdin_terminal() {
-                let mut input = String::new();
-                if let Err(e) = std::io::stdin().read_to_string(&mut input) {
-                    eprintln!("[ai-summary] Failed to read stdin: {e}");
-                    std::process::exit(1);
-                }
-                input
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect()
-            } else {
-                urls.clone()
-            };
-            if urls.is_empty() {
-                eprintln!("Error: No URLs provided.");
-                std::process::exit(1);
-            }
-            run_fetch(&cli, &cfg, &client, &urls, prompt);
+            let urls = read_urls(urls);
+            run_fetch(cli, cfg, &client, &urls, prompt.as_deref());
         }
-        Commands::Bench => {
-            run_bench(&cfg, &client);
-        }
+        Commands::Bench => run_bench(cfg, &client),
         Commands::Crawl {
             url,
             prompt,
             limit,
             depth,
         } => {
-            run_crawl(&cli, &cfg, &client, url, prompt, *limit, *depth);
+            run_crawl(cli, cfg, url, prompt.as_deref(), *limit, *depth);
         }
         Commands::Github {
             args,
@@ -268,14 +109,71 @@ fn main() {
             language,
             prompt,
         } => {
-            run_github(&cli, &cfg, &client, args, repo, language, prompt);
+            run_github(cli, cfg, args, repo, language, prompt);
         }
         Commands::Repo {
             repo,
             prompt,
             include,
         } => {
-            run_repo(&cli, &cfg, &client, repo, prompt, include.as_deref());
+            run_repo(cli, cfg, repo, prompt, include.as_deref());
         }
+        _ => unreachable!("only acquisition commands reach this dispatcher"),
     }
+}
+
+fn read_urls(args: &[String]) -> Vec<String> {
+    if !args.is_empty() {
+        return check_urls(args.to_vec());
+    }
+    let input = if terminal::is_stdin_terminal() {
+        String::new()
+    } else {
+        let bytes = read_limit(std::io::stdin().lock(), 256 * 1024)
+            .unwrap_or_else(|error| commands::fail(1, &error));
+        String::from_utf8(bytes).unwrap_or_else(|_| commands::fail(1, "URL list is not UTF-8"))
+    };
+    let urls: Vec<_> = input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+    check_urls(urls)
+}
+
+fn check_urls(urls: Vec<String>) -> Vec<String> {
+    if urls.is_empty() {
+        commands::fail(1, "no URLs provided");
+    }
+    if urls.len() > 128 {
+        commands::fail(1, "fetch accepts at most 128 URLs");
+    }
+    urls
+}
+
+fn configuration_or_exit<T>(result: Result<T, String>) -> T {
+    result.unwrap_or_else(|error| {
+        eprintln!("[ai-summary] {error}");
+        std::process::exit(1);
+    })
+}
+
+pub(crate) fn read_limit(reader: impl Read, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read input")?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("input exceeds {limit} bytes"));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn credential_client() -> Result<Client, String> {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "cannot initialize HTTP client".into())
 }

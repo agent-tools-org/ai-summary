@@ -89,7 +89,7 @@
         <li><code>ai-summary init</code> — Install Claude Code integration</li>
         <li><code>ai-summary config</code> — Show/create config</li>
       </ul>
-      <p>Flags: <code>--deep</code>, <code>--raw</code>, <code>--json</code>, <code>--metadata</code>, <code>--no-cache</code>, <code>--doc</code>, <code>--browser</code>, <code>--cf</code>, <code>--api-url</code>, <code>--api-key</code>, <code>--model</code></p>
+      <p>Flags: <code>--deep</code>, <code>--raw</code>, <code>--json</code>, <code>--metadata</code>, <code>--no-cache</code>, <code>--browser</code>, <code>--cf</code>, <code>--api-url</code>, <code>--api-key</code>, <code>--model</code></p>
     </section>
 
     <section id="claude-integration">
@@ -102,7 +102,7 @@ ai-summary init --uninstall    # Remove</code></pre>
       <pre><code>Without hook: cargo test → 3000 tokens (raw)
 With hook:    cargo test → 15 tokens (compressed)</code></pre>
       <h3>Tee mode</h3>
-      <p>Failed commands save full output to <code>/tmp/ai-summary-tee/</code> — AI can read the raw log if the summary isn't enough.</p>
+      <p>Failed commands can save up to 1 MiB of output to <code>~/.ai-summary/tee/</code> — AI can read the raw log if the summary isn't enough.</p>
     </section>
 
     <section id="benchmarks">

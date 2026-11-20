@@ -11,9 +11,13 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FetchedPage {
     pub url: String,
+    pub final_url: String,
+    pub extractor: &'static str,
+    pub media_type: String,
+    pub truncated: bool,
     pub text: String,
 }
 
@@ -33,17 +37,10 @@ pub struct MessageContent {
     pub content: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(serde::Serialize, Deserialize, Clone)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-}
-
-pub struct SummarizeResult {
-    pub text: String,
-    pub usage: Option<Usage>,
-    pub raw_chars: u64,
-    pub summary_chars: u64,
 }
 
 pub(crate) fn error_detail(body: &str, secret: &str) -> String {
@@ -71,10 +68,7 @@ pub(crate) fn cli_failure(status: &std::process::ExitStatus, stderr: &str, secre
         .code()
         .map(|value| value.to_string())
         .unwrap_or_else(|| "signal".to_string());
-    format!(
-        "exit code {code}; stderr: {}",
-        error_detail(stderr, secret)
-    )
+    format!("exit code {code}; stderr: {}", error_detail(stderr, secret))
 }
 
 fn redact_sensitive(text: &str, secret: &str) -> String {

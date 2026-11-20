@@ -10,14 +10,14 @@ fi
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-if [ -z "$CMD" ]; then
+if [ -z "$CMD" ] || [[ "$CMD" == *$'\n'* ]]; then
   exit 0
 fi
 
 # Only rewrite test commands (simple ones without pipes — piped commands
 # are already filtered and don't need wrapping)
 case "$CMD" in
-  *\|*|*\>*|*\<*|*\;*|*\&\&*|*\$\(*) exit 0 ;;  # Skip piped/redirected/compound commands
+  *\|*|*\>*|*\<*|*\;*|*\&*|*\(*|*\)*|*\`*) exit 0 ;;  # Skip piped/redirected/compound commands
 esac
 
 # The command must START with a test invocation (optional VAR=val env prefixes).
@@ -27,12 +27,9 @@ STRIPPED="$CMD"
 while [[ "$STRIPPED" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+ ]]; do
   STRIPPED="${STRIPPED#*[[:space:]]}"
 done
-case "$STRIPPED" in
-  "cargo test"*|"cargo nextest"*) ;;
-  "npm test"*|"npx vitest"*|"npx jest"*|"yarn test"*) ;;
-  pytest*|"go test"*|"mix test"*|"dotnet test"*|"make test"*) ;;
-  *) exit 0 ;;
-esac
+if [[ ! "$STRIPPED" =~ ^(cargo[[:space:]]+(test|nextest)|npm[[:space:]]+test|npx[[:space:]]+(vitest|jest)|yarn[[:space:]]+test|pytest|go[[:space:]]+test|mix[[:space:]]+test|dotnet[[:space:]]+test|make[[:space:]]+test)($|[[:space:]]) ]]; then
+  exit 0
+fi
 
 # Rewrite: cargo test → ai-summary wrap cargo test
 REWRITTEN="ai-summary wrap $CMD"
@@ -45,8 +42,6 @@ jq -n \
   '{
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
-      "permissionDecision": "allow",
-      "permissionDecisionReason": "ai-summary test wrap",
       "updatedInput": $updated
     }
   }'

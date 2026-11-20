@@ -1,82 +1,65 @@
 // Helper routines for fetch operations: HTML cleanup, text extraction, redirects.
-// Exports: collapse_ws(), extract_redirect(), strip_html(), strip_ansi(), extracted_text(), truncate_text().
+// Exports: collapse_ws(), extract_redirect(), strip_html(), strip_ansi(), extracted_text().
 // Deps: readability extractor, scraper, std, defuddle CLI (optional).
 
+use crate::subprocess;
 use readability::extractor;
 use scraper::{Html, Selector};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::{io::Write, process::Command, sync::OnceLock, time::Duration};
 
-/// Whether `defuddle` CLI is globally installed (checked once).
-static HAS_DEFUDDLE: OnceLock<bool> = OnceLock::new();
-static DEFUDDLE_SEQ: AtomicU64 = AtomicU64::new(0);
-
-fn has_defuddle() -> bool {
-    *HAS_DEFUDDLE.get_or_init(|| {
-        let ok = Command::new("defuddle")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            eprintln!("[ai-summary] defuddle detected, using as content extractor");
+fn defuddle_extract(html: &str) -> Option<String> {
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    if !*DETECTED.get_or_init(|| subprocess::available(Command::new("defuddle").arg("--version"))) {
+        return None;
+    }
+    // A file operand works on both installed and current Defuddle releases.
+    let mut source = tempfile::Builder::new().suffix(".html").tempfile().ok()?;
+    source.write_all(html.as_bytes()).ok()?;
+    let result = subprocess::capture(
+        Command::new("defuddle")
+            .arg("parse")
+            .arg(source.path())
+            .arg("--markdown"),
+        None,
+        Duration::from_secs(5),
+        400_000,
+    );
+    let output = match result {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            eprintln!(
+                "[ai-summary] defuddle exited with {}; using built-in extraction",
+                output.status
+            );
+            return None;
         }
-        ok
-    })
-}
-
-fn defuddle_extract(_url: &str, html: &str) -> Option<String> {
-    if !has_defuddle() {
-        return None;
-    }
-    let seq = DEFUDDLE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("defuddle-{}-{seq}.html", std::process::id()));
-    std::fs::write(&tmp, html).ok()?;
-    let output = Command::new("defuddle")
-        .args(["parse", tmp.to_str()?, "--markdown"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok();
-    let _ = std::fs::remove_file(&tmp);
-    let output = output?;
-    if !output.status.success() {
-        return None;
-    }
+        Err(error) => {
+            eprintln!("[ai-summary] defuddle: {error}; using built-in extraction");
+            return None;
+        }
+    };
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.len() >= 200 {
-        Some(text)
-    } else {
-        None
-    }
+    (text.len() >= 200).then_some(text)
 }
 
-pub fn extracted_text(url: &str, body: &str) -> String {
+pub fn extracted_text(url: &str, body: &str) -> (&'static str, String) {
     let stripped = strip_html(body);
     // Try defuddle first — accept if it returns enough content relative to raw text.
-    if let Some(md) = defuddle_extract(url, body) {
+    if let Some(md) = defuddle_extract(body) {
         if md.len() > stripped.len() / 4 {
-            return md;
+            return ("defuddle", md);
         }
     }
     match extractor::extract(
         &mut body.as_bytes(),
-        &url
-            .parse()
+        &url.parse()
             .unwrap_or_else(|_| "https://example.com".parse().unwrap()),
     ) {
         Ok(product) if product.text.len() > stripped.len() / 4 && product.text.len() >= 200 => {
-            product.text
+            ("readability", product.text)
         }
-        _ => stripped,
+        _ => ("html_text", stripped),
     }
-}
-
-pub(crate) fn truncate_text(text: String, max_chars: usize) -> String {
-    text.chars().take(max_chars).collect()
 }
 
 pub fn extract_redirect(html: &str) -> Option<String> {
@@ -95,9 +78,9 @@ pub fn extract_redirect(html: &str) -> Option<String> {
             }
         }
     }
-    let lower = html.to_lowercase();
+    let lower = html.to_ascii_lowercase();
     if let Some(index) = lower.find("url=") {
-        let rest = &html[index + 4..];
+        let rest = html.get(index + 4..)?;
         let end = rest.find(['"', '\'', '>']).unwrap_or(rest.len());
         let url = rest[..end].trim();
         if url.starts_with("http") {

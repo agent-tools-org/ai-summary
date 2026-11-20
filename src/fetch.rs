@@ -1,391 +1,216 @@
-// Page fetching, Cloudflare rendering fetches, browser fetches, and parallel dispatch.
-// Exports: fetch_page(), fetch_page_browser(), fetch_page_cf(), fetch_page_jina(), fetch_pages_parallel().
-// Deps: crate::config::Config, crate::search::UA, reqwest blocking client, std::process.
+//! Acquire ordered URL outcomes and retain source provenance.
+//! HTTP and Cloudflare requests run in a bounded worker pool.
+
+mod browser;
+mod documents;
+pub(crate) mod http;
+mod passage;
+mod section;
+#[cfg(test)]
+mod tests;
+
+pub use crate::fetch_utils::strip_html;
+use crate::{config::Config, types::FetchedPage};
 use reqwest::blocking::Client;
-use std::io::Read;
-use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use crate::config::Config;
-use crate::search::UA;
-use crate::types::FetchedPage;
-pub use crate::fetch_utils::{collapse_ws, extract_redirect, strip_html};
-pub(crate) use crate::fetch_utils::strip_ansi;
-use crate::fetch_utils::{extracted_text, truncate_text};
+use serde::Serialize;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
+
 const MIN_BROWSER_TEXT_CHARS: usize = 200;
+const WORKERS: usize = 4;
+
+#[derive(Serialize)]
+pub struct FetchFailure {
+    pub url: String,
+    pub reason: String,
+}
+
+#[derive(Default)]
+pub struct FetchBatch {
+    pub pages: Vec<FetchedPage>,
+    pub failed: Vec<FetchFailure>,
+}
+
+impl FetchBatch {
+    pub fn status(&self) -> &'static str {
+        match (self.pages.is_empty(), self.failed.is_empty()) {
+            (true, _) => "failed",
+            (false, false) => "partial",
+            (false, true) => "ok",
+        }
+    }
+}
+
 pub fn fetch_page(client: &Client, url: &str, max_chars: usize) -> Option<FetchedPage> {
-    fetch_page_inner(client, url, max_chars, 3)
-}
-fn fetch_page_inner(
-    client: &Client,
-    url: &str,
-    max_chars: usize,
-    redirects_left: u8,
-) -> Option<FetchedPage> {
-    let resp = client
-        .get(url)
-        .header("User-Agent", UA)
-        .timeout(std::time::Duration::from_secs(8))
-        .send();
-    let resp = match resp {
-        Ok(response) => response,
-        Err(error) => {
-            eprintln!("[ai-summary] Failed to fetch {url}: {error}");
-            return None;
-        }
-    };
-    if !resp.status().is_success() {
-        eprintln!("[ai-summary] HTTP {} for {url}", resp.status());
-        return None;
-    }
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    if content_type.contains("application/pdf") || url.ends_with(".pdf") {
-        return fetch_binary_response(resp, url, max_chars, "pdf");
-    }
-    if content_type.contains("wordprocessingml.document") || url.ends_with(".docx") {
-        return fetch_binary_response(resp, url, max_chars, "docx");
-    }
-    if !is_text_response(content_type, url) {
-        eprintln!("[ai-summary] Skipping {url}: content-type {content_type}");
-        return None;
-    }
-    let mut body = String::new();
-    resp.take(200_000).read_to_string(&mut body).ok()?;
-    if body.len() < 1000 && redirects_left > 0 {
-        if let Some(redirect_url) = extract_redirect(&body) {
-            eprintln!("[ai-summary] Following redirect -> {redirect_url}");
-            return fetch_page_inner(client, &redirect_url, max_chars, redirects_left - 1);
-        }
-    }
-    let text = extracted_text(url, &body);
-    if text.len() < 50 {
-        eprintln!(
-            "[ai-summary] Skipping {url}: content too short after extraction ({} chars)",
-            text.len()
-        );
-        return None;
-    }
-    Some(FetchedPage {
-        url: url.to_string(),
-        text: truncate_text(text, max_chars),
-    })
+    http::direct(client, url, max_chars).ok()
 }
 
-fn is_text_response(content_type: &str, url: &str) -> bool {
-    if content_type.is_empty() {
-        return true;
-    }
-    content_type.contains("text/html")
-        || content_type.contains("text/plain")
-        || url.ends_with(".html")
-        || url.ends_with(".txt")
+pub fn fetch_page_jina(url: &str, max_chars: usize, key: &str) -> Option<FetchedPage> {
+    http::jina(url, max_chars, key).ok()
 }
 
-fn fetch_binary_response(
-    resp: reqwest::blocking::Response,
-    url: &str,
-    max_chars: usize,
-    format: &str,
-) -> Option<FetchedPage> {
-    let mut bytes = Vec::new();
-    resp.take(10_000_000).read_to_end(&mut bytes).ok()?;
-    let text = match format {
-        "pdf" => match pdf_extract::extract_text_from_mem(&bytes) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("[ai-summary] PDF extraction failed for {url}: {e}");
-                return None;
-            }
-        },
-        "docx" => match extract_docx_text(&bytes) {
-            Some(t) => t,
-            None => {
-                eprintln!("[ai-summary] DOCX extraction failed for {url}");
-                return None;
-            }
-        },
-        _ => return None,
-    };
-    let text = collapse_ws(text.trim());
-    if text.len() < 50 {
-        eprintln!(
-            "[ai-summary] Skipping {url}: {format} content too short ({} chars)",
-            text.len()
-        );
-        return None;
-    }
-    Some(FetchedPage {
-        url: url.to_string(),
-        text: truncate_text(text, max_chars),
-    })
-}
-fn extract_docx_text(bytes: &[u8]) -> Option<String> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).ok()?;
-    let mut xml = String::new();
-    archive
-        .by_name("word/document.xml")
-        .ok()?
-        .read_to_string(&mut xml)
-        .ok()?;
-    // Strip XML tags, keeping only text content (w:t elements etc.)
-    let mut out = String::with_capacity(xml.len() / 4);
-    let mut in_tag = false;
-    let mut last_tag = String::new();
-    for ch in xml.chars() {
-        match ch {
-            '<' => {
-                in_tag = true;
-                last_tag.clear();
-            }
-            '>' => {
-                in_tag = false;
-                // Add paragraph/line breaks at closing paragraph tags
-                if last_tag.starts_with("/w:p") {
-                    out.push('\n');
-                }
-            }
-            _ if in_tag => last_tag.push(ch),
-            _ => out.push(ch),
-        }
-    }
-    Some(out)
-}
-pub fn fetch_page_cf(
-    client: &Client,
-    cfg: &Config,
-    url: &str,
-    max_chars: usize,
-) -> Option<FetchedPage> {
-    let api_url = format!(
-        "https://api.cloudflare.com/client/v4/accounts/{}/browser-rendering/content",
-        cfg.cf_account_id
-    );
-    let resp = client
-        .post(&api_url)
-        .header("Authorization", format!("Bearer {}", cfg.cf_api_token))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "url": url,
-            "rejectResourceTypes": ["image", "media", "font", "stylesheet"]
-        }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send();
-    let body = match resp {
-        Ok(response) => response.text().ok()?,
-        Err(error) => {
-            eprintln!("[ai-summary] CF fetch failed for {url}: {error}");
-            return None;
-        }
-    };
-    let text = extracted_text(url, &body);
-    if text.len() < 50 {
-        eprintln!(
-            "[ai-summary] CF: skipping {url}: content too short ({} chars)",
-            text.len()
-        );
-        return None;
-    }
-    Some(FetchedPage {
-        url: url.to_string(),
-        text: truncate_text(text, max_chars),
-    })
-}
-pub fn fetch_page_jina(
-    client: &Client,
-    url: &str,
-    max_chars: usize,
-    api_key: &str,
-) -> Option<FetchedPage> {
-    let jina_url = format!("https://r.jina.ai/{}", url);
-    let mut req = client
-        .get(&jina_url)
-        .header("Accept", "text/plain")
-        .timeout(std::time::Duration::from_secs(15));
-    if !api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", api_key));
-    }
-    let body = match req.send() {
-        Ok(resp) => resp.text().ok()?,
-        Err(error) => {
-            eprintln!("[ai-summary] Jina fetch failed for {url}: {error}");
-            return None;
-        }
-    };
-    if body.len() < 50 || body.contains("AuthenticationRequiredError") {
-        return None;
-    }
-    Some(FetchedPage {
-        url: url.to_string(),
-        text: truncate_text(body, max_chars),
-    })
-}
-pub fn has_agent_browser() -> bool {
-    Command::new("agent-browser")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-fn agent_browser(args: &[&str]) -> Option<Output> {
-    Command::new("agent-browser")
-        .args(args)
-        .env("AGENT_BROWSER_DEFAULT_TIMEOUT", "12000")
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-}
-fn browser_text(args: &[&str]) -> Option<String> {
-    let output = agent_browser(args)?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    Some(collapse_ws(text.trim()))
-}
-pub fn fetch_page_browser(url: &str, max_chars: usize) -> Option<FetchedPage> {
-    eprintln!("[ai-summary] Browser fetch: {url}");
-    if agent_browser(&["open", url]).map(|output| output.status.success()) != Some(true) {
-        eprintln!("[ai-summary] agent-browser open failed for {url}");
-        return None;
-    }
-    if agent_browser(&["wait", "--load", "networkidle"]).map(|output| output.status.success())
-        != Some(true)
-    {
-        eprintln!("[ai-summary] agent-browser wait timed out for {url}, reading current page");
-    }
-    let mut text = browser_text(&["get", "text", "main"]).unwrap_or_default();
-    if text.len() < MIN_BROWSER_TEXT_CHARS {
-        text = browser_text(&["get", "text", "body"]).unwrap_or(text);
-    }
-    if text.len() < 50 {
-        eprintln!(
-            "[ai-summary] agent-browser: skipping {url}: content too short ({} chars)",
-            text.len()
-        );
-        return None;
-    }
-    Some(FetchedPage {
-        url: url.to_string(),
-        text: truncate_text(text, max_chars),
-    })
-}
 pub fn fetch_pages_parallel(
     client: &Client,
     cfg: &Config,
     urls: &[String],
     max_pages: usize,
-    max_chars: usize,
     use_cf: bool,
     use_browser: bool,
-) -> Vec<FetchedPage> {
-    if use_browser {
-        if has_agent_browser() {
-            return urls
-                .iter()
-                .take(max_pages.saturating_add(2))
-                .filter_map(|url| fetch_page_browser(url, max_chars))
-                .take(max_pages)
-                .collect();
-        }
-        eprintln!("[ai-summary] agent-browser not found, falling back to HTTP fetch...");
-    }
-    let (tx, rx) = mpsc::channel();
-    let mut handles = Vec::new();
-    for url in urls.iter().take(max_pages.saturating_add(2)) {
-        let (tx, url, client, cfg) = (tx.clone(), url.clone(), client.clone(), cfg.clone());
-        handles.push(thread::spawn(move || {
-            let page = if use_cf {
-                fetch_page_cf(&client, &cfg, &url, max_chars)
-            } else {
-                fetch_page(&client, &url, max_chars)
-            };
-            let _ = tx.send((url, page));
-        }));
-    }
-    drop(tx);
-    let mut pages = Vec::new();
-    let mut retries = Vec::new();
-    for (url, page) in rx {
-        if use_cf {
-            if let Some(page) = page {
-                pages.push(page);
-            }
-            continue;
-        }
-        match page {
-            Some(page) if page.text.len() < MIN_BROWSER_TEXT_CHARS => {
-                retries.push((url, Some(page)))
-            }
-            Some(page) => pages.push(page),
-            None => retries.push((url, None)),
-        }
-    }
-    for handle in handles {
-        let _ = handle.join();
-    }
-    if use_cf || retries.is_empty() {
-        pages.truncate(max_pages);
-        return pages;
-    }
-    if !has_agent_browser() {
-        // Try Jina Reader as fallback for failed/short fetches (works without API key)
-        for (url, page) in &retries {
-            if pages.len() >= max_pages {
-                break;
-            }
-            eprintln!("[ai-summary] Retrying via Jina Reader: {url}");
-            if let Some(jina_page) =
-                fetch_page_jina(client, url, max_chars, &cfg.jina_api_key).or(page.clone())
-            {
-                pages.push(jina_page);
-            }
-        }
-        pages.truncate(max_pages);
-        return pages;
-    }
-    for (url, page) in retries {
-        if pages.len() >= max_pages {
-            break;
-        }
-        eprintln!("[ai-summary] Retrying via agent-browser: {url}");
-        if let Some(page) = fetch_page_browser(&url, max_chars).or(page) {
-            pages.push(page);
-        }
-    }
-    pages.truncate(max_pages);
-    pages
+) -> FetchBatch {
+    fetch_batch(client, cfg, urls, max_pages, (use_cf, use_browser), None)
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn strips_html_tags() {
-        let html = "<body><p>hello <span>world</span></p></body>";
-        assert_eq!(strip_html(html), "hello world");
-    }
-    #[test]
-    fn strips_color_codes() {
-        assert_eq!(strip_ansi("\x1b[32mhello\x1b[0m"), "hello");
-    }
-    #[test]
-    fn has_agent_browser_returns_bool() {
-        let _: bool = has_agent_browser();
-    }
 
-    #[test]
-    fn empty_content_type_is_allowed_for_text_fallback() {
-        assert!(is_text_response("", "https://example.com/article"));
-    }
+pub(crate) fn fetch_search_evidence(
+    client: &Client,
+    cfg: &Config,
+    urls: &[String],
+    renderers: (bool, bool),
+    query: &str,
+) -> FetchBatch {
+    fetch_batch(client, cfg, urls, urls.len(), renderers, Some(query))
+}
 
-    #[test]
-    fn binary_content_type_is_rejected_for_text_fallback() {
-        assert!(!is_text_response("image/png", "https://example.com/image.png"));
+fn fetch_batch(
+    client: &Client,
+    cfg: &Config,
+    urls: &[String],
+    max_pages: usize,
+    (use_cf, use_browser): (bool, bool),
+    focus: Option<&str>,
+) -> FetchBatch {
+    if max_pages == 0 {
+        return FetchBatch::default();
     }
+    let candidates = &urls[..urls.len().min(max_pages.saturating_add(2))];
+    let max_chars = cfg.max_page_chars.min(16_000);
+    let browser_available = !use_cf && browser::has_agent_browser();
+    let direct = |url: &str| {
+        if use_cf {
+            http::cloudflare(cfg, url, max_chars)
+        } else {
+            http::direct_with_focus(client, url, max_chars, focus)
+        }
+    };
+    if use_browser {
+        return collect(
+            candidates,
+            candidates.iter().map(|url| browser_result(url, max_chars)),
+            max_pages,
+        );
+    }
+    let results = ordered_workers(candidates, direct);
+    let retry = |url: &str| {
+        if browser_available {
+            browser_result(url, max_chars)
+        } else {
+            http::jina(url, max_chars, &cfg.jina_api_key)
+        }
+    };
+    let retry = (!use_cf && (browser_available || !cfg.jina_api_key.is_empty())).then_some(retry);
+    collect_with_retry(candidates, results, max_pages, retry)
+}
+
+fn collect_with_retry(
+    candidates: &[String],
+    results: Vec<Result<FetchedPage, String>>,
+    max_pages: usize,
+    retry: Option<impl Fn(&str) -> Result<FetchedPage, String>>,
+) -> FetchBatch {
+    let Some(retry) = retry else {
+        return collect(candidates, results, max_pages);
+    };
+    let strong = results
+        .iter()
+        .filter(|result| {
+            result
+                .as_ref()
+                .is_ok_and(|page| page.text.len() >= MIN_BROWSER_TEXT_CHARS)
+        })
+        .count();
+    let mut remaining = max_pages.saturating_sub(strong).min(WORKERS * 2);
+    let results = candidates.iter().zip(results).map(|(url, result)| {
+        let weak = result
+            .as_ref()
+            .map_or(true, |page| page.text.len() < MIN_BROWSER_TEXT_CHARS);
+        if weak && remaining > 0 {
+            remaining -= 1;
+            return retry(url).or(result);
+        }
+        result
+    });
+    collect(candidates, results, max_pages)
+}
+
+fn browser_result(url: &str, max_chars: usize) -> Result<FetchedPage, String> {
+    http::validate_url(url)?;
+    browser::fetch_page_browser(url, max_chars)
+}
+
+fn ordered_workers<T: Send>(urls: &[String], fetch: impl Fn(&str) -> T + Sync) -> Vec<T> {
+    let next = AtomicUsize::new(0);
+    let (send, receive) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..WORKERS.min(urls.len()) {
+            let send = send.clone();
+            let (next, fetch) = (&next, &fetch);
+            scope.spawn(move || loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(url) = urls.get(index) else { break };
+                if send.send((index, fetch(url))).is_err() {
+                    break;
+                }
+            });
+        }
+    });
+    drop(send);
+    let mut records = receive.into_iter().collect::<Vec<_>>();
+    records.sort_unstable_by_key(|(index, _)| *index);
+    records.into_iter().map(|(_, record)| record).collect()
+}
+
+fn collect(
+    urls: &[String],
+    results: impl IntoIterator<Item = Result<FetchedPage, String>>,
+    limit: usize,
+) -> FetchBatch {
+    let mut batch = FetchBatch::default();
+    for (url, result) in urls.iter().zip(results) {
+        match result {
+            Ok(page) if batch.pages.len() < limit => batch.pages.push(page),
+            Ok(_) => {}
+            Err(reason) => batch.failed.push(FetchFailure {
+                url: url.clone(),
+                reason,
+            }),
+        }
+    }
+    batch
+}
+
+fn page(
+    url: &str,
+    final_url: &str,
+    extractor: &'static str,
+    media_type: &str,
+    text: String,
+    max_chars: usize,
+) -> Result<FetchedPage, String> {
+    if text.trim().is_empty() || max_chars == 0 {
+        return Err("no extractable text".into());
+    }
+    let end = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    Ok(FetchedPage {
+        url: url.into(),
+        final_url: final_url.into(),
+        extractor,
+        media_type: media_type.into(),
+        truncated: end < text.len(),
+        text: text[..end].into(),
+    })
 }

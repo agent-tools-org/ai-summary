@@ -23,6 +23,7 @@ Instead of sending raw 50K+ page content to Claude, ai-summary returns a focused
 ## Features
 
 - **Search + Summarize** — Gemini (Google Search grounding), DuckDuckGo, or Brave Search
+- **Deep Search** — Run multiple lookups, extract relevant passages, and cite fetched pages by number
 - **Fetch + Summarize** — Fetch any URL, extract content via [defuddle](https://github.com/kepano/defuddle) (markdown, site-specific extractors) or readability fallback, summarize with LLM
 - **PDF & DOCX Support** — Fetch and summarize PDF papers and Word documents directly
 - **Stdin Summarize** — Pipe any text through for compression
@@ -50,12 +51,12 @@ cargo install ai-summary
 # Or build from source
 git clone https://github.com/agent-tools-org/ai-summary.git
 cd ai-summary
-cargo install --path .
+cargo install --locked --path .
 ```
 
 Pre-built binaries for macOS (Apple Silicon / Intel) and Linux are available on [GitHub Releases](https://github.com/agent-tools-org/ai-summary/releases).
 
-Requirements: a summarization backend (opencode CLI recommended — free). Rust 1.70+ if building from source.
+Requirements: a summarization backend (opencode CLI recommended — free). Rust 1.89+ if building from source.
 
 ## Quick Start
 
@@ -120,11 +121,24 @@ brave_api_key = ""
 max_pages = 3
 max_page_chars = 4000
 max_summary_tokens = 1024
+summary_timeout_secs = 60
+opencode_timeout_secs = 25
 ```
 
 Search priority: **Gemini API** > **DuckDuckGo** > **Brave**
 
 Environment variables: `GEMINI_API_KEY`, `BRAVE_API_KEY`, `AI_SUMMARY_API_URL`, `AI_SUMMARY_API_KEY`, `AI_SUMMARY_MODEL`.
+
+An explicit summary API URL, key, or model selects the HTTP backend for that invocation. This applies to the matching `AI_SUMMARY_*` variables as well. A configured key stays with its original origin. Supply a key explicitly when switching to a different authenticated endpoint. The local oMLX key is discovered only for the default loopback service on port 8000.
+
+Summary commands return exit 2 on provider failure and write diagnostics to stderr. Content JSON includes `schema_version`. Gemini grounded search uses version 2. It lists source URLs in `grounding_sources` and links each citation to source indices. When a byte range matches the answer, the citation uses the range. Otherwise it includes the cited text when available. Summary JSON contains completed summary text. Where supported, `--raw --json` returns the acquired content without a summary request. `--metadata` identifies the backend and model used for completed summaries.
+
+The one-hour cache keys successful summaries by source content, question, and backend. It retains up to 512 entries. Source acquisition still runs to detect content changes. Authenticated custom HTTP requests and responses from fallback backends bypass summary caching. Existing cache entries are ignored by the new key format.
+
+Multi-URL fetch runs up to four downloads at a time and returns pages in input order. JSON reports failed URLs and the overall result. Partial results exit 0. A batch with no usable pages exits 2. The HTTP path handles HTML, text, PDF, and DOCX. It retains up to 2 MiB of HTML or text and prioritizes a matching HTML section when the URL includes an anchor. An installed browser can retry short or failed pages. Jina retries require `JINA_API_KEY`. Opt in to Cloudflare with `--cf` and configured credentials.
+
+A fetch or crawl accepts at most 128 pages. Summary context is limited to 256 KiB of UTF-8 text. Repository packing requires an installed `repomix`. GitHub and repository adapters enforce subprocess deadlines and output limits. Cloudflare crawl has a five-minute job deadline and follows result cursors. [Cloudflare Browser Run crawl reference](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/).
+
 
 ## Claude Code Integration
 
@@ -139,7 +153,7 @@ ai-summary init --uninstall    # Remove everything
 This installs three things:
 
 1. **Prompt injection** into `~/.claude/CLAUDE.md` — Claude and all subagents use `ai-summary` instead of built-in WebSearch/WebFetch
-2. **Bash hook** — rewrites test commands to run through `ai-summary wrap` for real token savings
+2. **Bash hook** — rewrites simple test commands to run through `ai-summary wrap` under Claude Code’s normal permission checks
 3. **WebFetch/WebSearch hooks** — on first use per session, denies and reminds Claude to use `ai-summary`; subsequent calls pass through silently
 
 ```
@@ -155,13 +169,7 @@ Supported test commands: `cargo test`, `cargo nextest`, `npm test`, `npx vitest`
 
 ### Tee mode
 
-When a wrapped command fails, the full raw output is saved to `/tmp/ai-summary-tee/` so the AI can read it if the summary isn't enough:
-
-```
-TESTS FAILED: 9 passed, 1 failed, 0 ignored.
-test bar ... FAILED
-[ai-summary] Full output saved to: /tmp/ai-summary-tee/1710000000_cargo_test.log
-```
+A failed command keeps its exit code, stdout, and stderr. If the output is at least 500 bytes, `wrap` also saves up to 1 MiB in `~/.ai-summary/tee/`. It retains the 20 most recent logs.
 
 Requires `jq` and `ai-summary` in PATH.
 
@@ -183,17 +191,31 @@ Requires `jq` and `ai-summary` in PATH.
 | `ai-summary reset-stats` | Reset statistics |
 | `ai-summary reset-cache` | Clear the summary cache |
 | `ai-summary config` | Show or create config file |
+| `ai-summary doctor` | Check tools and summary endpoint readiness |
+
+### Deep search
+
+```bash
+ai-summary search --deep "When is retrying an HTTP request safe?"
+ai-summary search --deep --raw --json "When is retrying an HTTP request safe?"
+ai-summary doctor --json
+```
+
+Deep search runs the original question, a primary-source query, and an independent-analysis query through DuckDuckGo. With a Brave key it also checks Brave. When primary-source results are missing or fewer than three sites appear, it runs a follow-up lookup. With Gemini configured, a summarized search can use Google grounding for that lookup. Other searches retry with keywords or exclude a repeated site. It prioritizes distinct sites and attempts to retrieve up to ten pages. For long direct downloads it looks for relevant passages throughout the extracted text. Synthesis uses the numbered excerpts and reports citation IDs it could not resolve. The raw form returns the evidence without invoking a model.
+
+Deep search JSON includes the executed `queries`, ranked `sources` (including extraction method and final URL), `failed` downloads, `cited_ids`, and counts of fetched and cited sites. Source IDs start at 1. Query offsets in `lookup_ids` start at 0. The status is `partial` if fewer than three sites were fetched or cited, citations could not be resolved, or a lookup or download failed. It exits 2 if every download fails or synthesis fails, and still emits the report. Numeric citation validation checks source availability. Evaluate the specific claim against the cited page when accuracy matters.
+
+`doctor` checks installed tools and the loopback model endpoint without generating text. Add `--check-hosted` to make a read-only OpenRouter key check. Summary generation uses `summary_timeout_secs` across its backends, with `opencode_timeout_secs` capping the OpenCode attempt. On Unix, SIGINT and SIGTERM stop active tool process groups owned by the CLI.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--deep` | Fetch more pages (5 instead of 3) |
+| `--deep` | Search multiple angles and check up to ten sources. On other acquisition commands, allow five pages. |
 | `--raw` | Skip summarization, return raw content |
 | `--json` | Structured JSON output (for scripting/piping) |
 | `--metadata` | Add source URLs, timestamps, cache status, model to JSON output |
 | `--no-cache` | Bypass the summary cache (force fresh LLM call) |
-| `--doc` | Doc-aware mode (reserved for future) |
 | `--browser` | Use agent-browser for JS-heavy pages |
 | `--cf` | Use Cloudflare Browser Rendering |
 | `--api-url` | Override API endpoint |
@@ -207,8 +229,11 @@ Requires `jq` and `ai-summary` in PATH.
 | 0 | Success |
 | 1 | User error (bad args, no input) |
 | 2 | API/network error (no results, fetch failed) |
+| 130 / 143 | Interrupted by SIGINT / SIGTERM |
 
 ## Statistics
+
+Statistics writes are serialized and atomic. Existing unversioned `stats.json` files migrate on the next write. Malformed or newer files are preserved. Period reports use the 500 most recent records. Historical cost figures are estimates based on fixed rates.
 
 ```
 ai-summary Token Savings

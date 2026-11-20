@@ -1,100 +1,121 @@
-// Summary cache for ai-summary CLI.
-// Exports: CacheEntry, DEFAULT_CACHE_TTL, cache_dir, cache_key, cache_get, cache_put, cache_clear.
-// Deps: serde, sha2, std (fs, path, time).
+//! Store completed summaries against a versioned content and backend identity.
+//! Exports CacheKey, cache_get, cache_put, and cache_clear.
 
-#![allow(dead_code)]
-
-use crate::config::dirs_home;
+use crate::{config::dirs_home, llm::Summary};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-pub const DEFAULT_CACHE_TTL: u64 = 3600;
+const CACHE_REVISION: &str = "summary-v2";
+const TTL_SECONDS: u64 = 3600;
+
+pub struct CacheKey(String);
+
+impl CacheKey {
+    pub fn new(mode: &str, prompt: &str, content: &str, scope: &str) -> Self {
+        let mut hash = Sha256::new();
+        for field in [CACHE_REVISION, mode, prompt, content, scope] {
+            hash.update((field.len() as u64).to_be_bytes());
+            hash.update(field.as_bytes());
+        }
+        Self(format!("{:x}", hash.finalize()))
+    }
+
+    fn path(&self) -> PathBuf {
+        cache_dir().join(&self.0)
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct CacheEntry {
-    pub url: String,
-    pub prompt: String,
-    pub summary: String,
-    pub raw_chars: u64,
-    pub summary_chars: u64,
+    pub summary: Summary,
     pub timestamp: u64,
-    pub ttl: u64,
 }
 
-pub fn cache_dir() -> PathBuf {
-    let dir = dirs_home().join(".ai-summary/cache");
-    let _ = fs::create_dir_all(&dir);
-    dir
+fn cache_dir() -> PathBuf {
+    dirs_home().join(".ai-summary/cache")
 }
 
-pub fn cache_key(url: &str, prompt: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(url.as_bytes());
-    hasher.update(b"|");
-    hasher.update(prompt.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-pub fn cache_get(url: &str, prompt: &str) -> Option<CacheEntry> {
-    let key = cache_key(url, prompt);
-    let path = cache_dir().join(&key);
-    let content = fs::read_to_string(&path).ok()?;
-    let entry: CacheEntry = serde_json::from_str(&content).ok()?;
+pub fn cache_get(key: &CacheKey) -> Option<CacheEntry> {
+    let contents = fs::read(key.path()).ok()?;
+    let entry: CacheEntry = serde_json::from_slice(&contents).ok()?;
     let now = current_timestamp();
-    if is_stale(&entry, now) {
-        let _ = fs::remove_file(&path);
-        return None;
-    }
-    Some(entry)
+    (entry.timestamp <= now
+        && now - entry.timestamp < TTL_SECONDS
+        && !entry.summary.text.trim().is_empty())
+    .then_some(entry)
 }
 
-pub fn cache_put(
-    url: &str,
-    prompt: &str,
-    summary: &str,
-    raw_chars: u64,
-    summary_chars: u64,
-) {
+pub fn cache_put(key: &CacheKey, summary: &Summary) {
     let entry = CacheEntry {
-        url: url.to_string(),
-        prompt: prompt.to_string(),
-        summary: summary.to_string(),
-        raw_chars,
-        summary_chars,
+        summary: summary.clone(),
         timestamp: current_timestamp(),
-        ttl: DEFAULT_CACHE_TTL,
     };
-    let key = cache_key(url, prompt);
-    let path = cache_dir().join(&key);
-    if let Ok(content) = serde_json::to_string(&entry) {
-        let _ = fs::write(&path, content);
+    let Ok(contents) = serde_json::to_vec(&entry) else {
+        return;
+    };
+    let Ok(_lock) = crate::storage::lock(&dirs_home().join(".ai-summary/cache.lock")) else {
+        return;
+    };
+    if crate::storage::write_atomic(&key.path(), &contents, 0o600).is_ok() {
+        prune_cache();
     }
 }
 
 pub fn cache_clear() -> u64 {
-    let dir = cache_dir();
-    let mut removed = 0;
-    if let Ok(entries) = fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && fs::remove_file(&path).is_ok() {
-                removed += 1;
-            }
-        }
-    }
-    removed
+    let Ok(_lock) = crate::storage::lock(&dirs_home().join(".ai-summary/cache.lock")) else {
+        return 0;
+    };
+    fs::read_dir(cache_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| fs::remove_file(entry.path()).is_ok())
+        .count() as u64
 }
 
-fn is_stale(entry: &CacheEntry, now: u64) -> bool {
-    now >= entry.timestamp.saturating_add(entry.ttl)
-}
-
-fn current_timestamp() -> u64 {
+pub fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
         .unwrap_or_default()
+        .as_secs()
+}
+
+fn prune_cache() {
+    const MAX_ENTRIES: usize = 512;
+    let Ok(directory) = fs::read_dir(cache_dir()) else {
+        return;
+    };
+    let mut live = Vec::new();
+    let now = SystemTime::now();
+    for entry in directory.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        if now
+            .duration_since(modified)
+            .is_ok_and(|age| age.as_secs() >= TTL_SECONDS)
+        {
+            let _ = fs::remove_file(entry.path());
+        } else {
+            live.push((modified, entry.path()));
+        }
+    }
+    live.sort_unstable();
+    let excess = live.len().saturating_sub(MAX_ENTRIES);
+    for (_, path) in live.into_iter().take(excess) {
+        let _ = fs::remove_file(path);
+    }
 }

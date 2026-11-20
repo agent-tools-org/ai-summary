@@ -41,9 +41,9 @@ fn bench_row(client: &Client, cfg: &Config, url: &str) -> Option<BenchRow> {
     let (source, text) = fetch_content(client, cfg, url)?;
     let raw_chars = text.len() as u64;
     eprintln!("[bench] Summarizing {url} ({raw_chars} chars)...");
-    let summary = llm_summarize(client, cfg, "", &text, false);
+    let summary = llm_summarize(cfg, "", &text, false).ok()?;
     let raw_tokens = raw_chars / 4;
-    let compressed_tokens = summary.summary_chars / 4;
+    let compressed_tokens = summary.text.len() as u64 / 4;
     let ratio_pct = if raw_tokens == 0 {
         0.0
     } else {
@@ -70,7 +70,7 @@ fn fetch_content(client: &Client, cfg: &Config, url: &str) -> Option<(&'static s
             page.text.len()
         );
     }
-    if let Some(page) = fetch_page_jina(client, url, cfg.max_page_chars, &cfg.jina_api_key) {
+    if let Some(page) = fetch_page_jina(url, cfg.max_page_chars, &cfg.jina_api_key) {
         return Some(("jina", page.text));
     }
     eprintln!("[bench] {url}: Failed to fetch content");
@@ -120,6 +120,6 @@ fn truncate_url(url: &str) -> String {
     if url.len() <= 30 {
         url.to_string()
     } else {
-        format!("{}...", &url[..27])
+        format!("{}...", crate::text::prefix(url, 27))
     }
 }

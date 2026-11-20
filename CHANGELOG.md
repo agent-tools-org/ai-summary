@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.1.0
+
+- Add deep search with multiple lookups, up to ten retrieved pages, numbered citations, and a raw evidence report.
+- Add `doctor`, an overall summary timeout, and Unix signal handling for active subprocess groups.
+- Update Defuddle and agent-browser integration and extract anchored sections from longer HTML documents.
+- Use Gemini grounded JSON schema version 2. Read deduplicated source URLs from `grounding_sources[].url`. Citation byte ranges refer to the answer text.
+- Separate acquisition, summary execution, rendering, and storage.
+- Report ordered partial results and structured citations. Bound provider requests and subprocess work.
+- Isolate credentials by endpoint. Preserve third-party Claude hooks and the normal permission flow.
+- Preserve and migrate legacy statistics using atomic writes. Keep summary caches bounded.
+- Preserve subprocess arguments, output streams, and exit status in `wrap`.
+
 ## v2.13.0 (2026-08-09)
 
 Every backend was failing at once, and every failure was reported as the same generic

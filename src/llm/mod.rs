@@ -1,125 +1,198 @@
-//! LLM backend selection and public summarization API.
-//! Exports: has_opencode(), llm_summarize(), strip_thinking().
-//! Deps: Config, reqwest client, HTTP backend, opencode backend.
+//! Select summary backends and return completed, provider-attributed results.
+//! HTTP and subprocess adapters return data without writing to stdout.
 
 mod clean;
 mod http;
 mod opencode;
 mod stream;
 
-use reqwest::blocking::Client;
-
 use crate::config::Config;
-use crate::types::SummarizeResult;
-use http::HttpSummaryRequest;
+use crate::types::Usage;
+use reqwest::blocking::Client;
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
-const OPENROUTER_API_URL: &str = "https://openrouter.ai/api";
+const BACKEND_TIMEOUT: Duration = Duration::from_secs(120);
+
+pub(crate) const OPENROUTER_API_URL: &str = "https://openrouter.ai/api";
 const OPENCODE_MODEL: &str = "opencode/nemotron-3-ultra-free";
 
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    Http,
+    OpenRouter,
+    Opencode,
+    Gemini,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct Summary {
+    pub text: String,
+    pub usage: Option<Usage>,
+    pub provider: Provider,
+    pub model: String,
+}
+
+impl Summary {
+    pub(crate) fn new(
+        text: &str,
+        usage: Option<Usage>,
+        provider: Provider,
+        model: &str,
+    ) -> Result<Self, String> {
+        let text = clean::strip_thinking(text);
+        if text.is_empty() {
+            return Err("backend returned no summary".into());
+        }
+        Ok(Self {
+            text,
+            usage,
+            provider,
+            model: model.into(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct SummaryError(Vec<String>);
+
+impl fmt::Display for SummaryError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(output, "{}", self.0.join("; "))
+    }
+}
+
 pub(crate) fn has_opencode() -> bool {
-    opencode::has_opencode()
+    static DETECTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DETECTED.get_or_init(opencode::has_opencode)
 }
 
-/// Main entry: tries OpenRouter direct -> opencode CLI -> config API.
 pub fn llm_summarize(
-    client: &Client,
     cfg: &Config,
     prompt: &str,
     content: &str,
     streaming: bool,
-) -> SummarizeResult {
-    if let Some(result) = try_openrouter(client, cfg, prompt, content, streaming) {
-        return result;
-    }
-    if let Some(result) = try_opencode(prompt, content, streaming, &cfg.model) {
-        return result;
-    }
-    summarize_config_api(client, cfg, prompt, content, streaming)
-}
-
-fn try_openrouter(
-    client: &Client,
-    cfg: &Config,
-    prompt: &str,
-    content: &str,
-    streaming: bool,
-) -> Option<SummarizeResult> {
-    if cfg.openrouter_api_key.is_empty() {
-        return None;
-    }
-    let model = &cfg.openrouter_model;
-    let model_short = model.split('/').next_back().unwrap_or(model);
-    let is_free = model.ends_with(":free");
-    let cost_label = if is_free { "OpenRouter, free" } else { "OpenRouter" };
-    eprintln!("Summarizing with {model_short} ({cost_label})...");
-    let result = http::summarize_http(
-        client,
-        HttpSummaryRequest {
-            api_url: OPENROUTER_API_URL,
-            api_key: &cfg.openrouter_api_key,
-            model,
-            model_display: model_short,
-            max_tokens: cfg.max_summary_tokens,
-            cost_label,
+) -> Result<Summary, SummaryError> {
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| SummaryError(vec!["failed to initialize HTTP summary client".into()]))?;
+    let deadline = Instant::now() + Duration::from_secs(cfg.summary_timeout_secs.clamp(1, 600));
+    let mut failures = Vec::new();
+    let mut plan = Backend::plan(cfg).into_iter().peekable();
+    while let Some(backend) = plan.next() {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            failures.push("overall summary deadline exceeded".into());
+            break;
+        };
+        let cap = if matches!(backend, Backend::Opencode) {
+            Duration::from_secs(cfg.opencode_timeout_secs.clamp(1, 600))
+        } else {
+            BACKEND_TIMEOUT
+        };
+        let result = backend.summarize(
+            &client,
             prompt,
             content,
+            cfg.max_summary_tokens,
             streaming,
-        },
-    );
-    if result.summary_chars > 0 {
-        return Some(result);
+            remaining.min(cap),
+        );
+        match result {
+            Ok(summary) => return Ok(summary),
+            Err(reason) => {
+                let diagnostic = format!("{}: {reason}", backend.label());
+                if plan.peek().is_some() {
+                    eprintln!("[ai-summary] {diagnostic}; trying fallback");
+                }
+                failures.push(diagnostic);
+            }
+        }
     }
-    eprintln!(
-        "[ai-summary] OpenRouter failed: {}; trying fallback...",
-        result.text
-    );
-    None
+    Err(SummaryError(failures))
 }
 
-fn try_opencode(
-    prompt: &str,
-    content: &str,
-    streaming: bool,
-    fallback_model: &str,
-) -> Option<SummarizeResult> {
-    if !has_opencode() {
-        return None;
-    }
-    let model_short = OPENCODE_MODEL
-        .strip_prefix("opencode/")
-        .unwrap_or(OPENCODE_MODEL);
-    eprintln!("Summarizing with {model_short} (opencode, free)...");
-    match opencode::summarize_opencode(OPENCODE_MODEL, prompt, content, streaming) {
-        Ok(result) => return Some(result),
-        Err(reason) => eprintln!(
-            "[ai-summary] opencode failed: {reason}; falling back to {fallback_model}..."
-        ),
-    }
-    None
+enum Backend<'a> {
+    Http(Provider, &'a str, &'a str, &'a str),
+    Opencode,
 }
 
-fn summarize_config_api(
-    client: &Client,
-    cfg: &Config,
-    prompt: &str,
-    content: &str,
-    streaming: bool,
-) -> SummarizeResult {
-    let is_local = cfg.api_url.contains("127.0.0.1") || cfg.api_url.contains("localhost");
-    let cost_label = if is_local { "free, local" } else { "API" };
-    eprintln!("Summarizing with {} ({})...", cfg.model, cfg.api_url);
-    http::summarize_http(
-        client,
-        HttpSummaryRequest {
-            api_url: &cfg.api_url,
-            api_key: &cfg.api_key,
-            model: &cfg.model,
-            model_display: &cfg.model,
-            max_tokens: cfg.max_summary_tokens,
-            cost_label,
-            prompt,
-            content,
-            streaming,
-        },
-    )
+impl<'a> Backend<'a> {
+    fn plan(cfg: &'a Config) -> Vec<Self> {
+        let mut plan = Vec::new();
+        if !cfg.explicit_summary_backend {
+            if !cfg.openrouter_api_key.is_empty() {
+                plan.push(Self::Http(
+                    Provider::OpenRouter,
+                    OPENROUTER_API_URL,
+                    &cfg.openrouter_api_key,
+                    &cfg.openrouter_model,
+                ));
+            }
+            if has_opencode() {
+                plan.push(Self::Opencode);
+            }
+        }
+        plan.push(Self::Http(
+            Provider::Http,
+            &cfg.api_url,
+            &cfg.api_key,
+            &cfg.model,
+        ));
+        plan
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Http(Provider::OpenRouter, ..) => "OpenRouter",
+            Self::Http(..) => "configured HTTP backend",
+            Self::Opencode => "opencode",
+        }
+    }
+
+    fn summarize(
+        &self,
+        client: &Client,
+        prompt: &str,
+        content: &str,
+        max_tokens: u32,
+        streaming: bool,
+        timeout: Duration,
+    ) -> Result<Summary, String> {
+        match self {
+            Self::Http(provider, url, key, model) => http::summarize_http(
+                client,
+                http::HttpSummaryRequest {
+                    provider: *provider,
+                    url,
+                    key,
+                    model,
+                    max_tokens,
+                    prompt,
+                    content,
+                    streaming,
+                    timeout,
+                },
+            ),
+            Self::Opencode => {
+                opencode::summarize_opencode(OPENCODE_MODEL, prompt, content, timeout)
+            }
+        }
+    }
+}
+
+pub fn cache_scope(cfg: &Config) -> Option<(Provider, String)> {
+    let plan = Backend::plan(cfg);
+    let max_tokens = cfg.max_summary_tokens;
+    match plan.first()? {
+        Backend::Http(Provider::Http, _, key, _) if !key.is_empty() => None,
+        Backend::Http(provider, url, _, model) => Some((
+            *provider,
+            serde_json::json!([provider, url, model, max_tokens]).to_string(),
+        )),
+        Backend::Opencode => Some((Provider::Opencode, OPENCODE_MODEL.into())),
+    }
 }

@@ -1,0 +1,52 @@
+# ai-summary configuration
+# Supports any OpenAI-compatible API endpoint
+
+# Local oMLX (recommended for Apple Silicon)
+api_url = "http://127.0.0.1:8000"
+api_key = ""  # Leave empty for oMLX auto-detection
+model = "Qwen3.5-9B-MLX-4bit"
+
+# --- Alternative providers (uncomment one) ---
+# api_url = "https://api.openai.com"
+# api_key = "sk-..."
+# model = "gpt-4o-mini"
+
+# api_url = "https://api.groq.com/openai"
+# api_key = "gsk_..."
+# model = "llama-3.3-70b-versatile"
+
+# api_url = "https://api.deepseek.com"
+# api_key = "sk-..."
+# model = "deepseek-chat"
+
+# --- Search provider ---
+# Gemini + Google Search grounding (recommended, best quality)
+# Get free key at https://aistudio.google.com/apikey
+gemini_api_key = ""
+gemini_model = "gemini-2.5-flash"
+
+# Brave Search API fallback (free: https://brave.com/search/api/)
+brave_api_key = ""
+
+# Search priority: Gemini (if key set) > DuckDuckGo > Brave (if key set)
+
+max_pages = 3
+max_page_chars = 4000
+max_summary_tokens = 1024
+summary_timeout_secs = 60
+opencode_timeout_secs = 25
+
+
+# --- OpenRouter (direct API, fast + cheap) ---
+# Get key at: https://openrouter.ai/keys
+# Or run: ai-summary setup --openrouter-key YOUR_KEY
+# openrouter_api_key = ""
+# openrouter_model = "xiaomi/mimo-v2.5"
+
+# --- Fetch fallback ---
+# Jina Reader API (free tier available: https://jina.ai/reader/)
+# jina_api_key = ""
+
+# --- Cloudflare Browser Rendering (crawl command) ---
+# cf_account_id = ""
+# cf_api_token = ""

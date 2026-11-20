@@ -2,8 +2,6 @@
 // Exports: run_compress().
 // Deps: crate::fetch::strip_html, crate::stats::{fmtn, load_stats, save_stats}, std::io::Read.
 
-use std::io::Read;
-
 use crate::fetch::strip_html;
 use crate::stats::{fmtn, record_compress};
 
@@ -50,7 +48,7 @@ pub(crate) fn compress_text(input: &str, max_chars: usize) -> CompressionResult 
         "newsletter",
     ];
 
-    let mut out = String::with_capacity(max_chars);
+    let mut out = String::with_capacity(max_chars.min(cleaned.len()));
     let lines: Vec<&str> = cleaned.lines().collect();
     let chunks: Vec<&str> = if lines.len() > 3 {
         lines
@@ -76,7 +74,7 @@ pub(crate) fn compress_text(input: &str, max_chars: usize) -> CompressionResult 
         }
 
         if out.len() >= max_chars {
-            out.truncate(max_chars);
+            out.truncate(crate::text::prefix(&out, max_chars).len());
             break;
         }
     }
@@ -88,11 +86,10 @@ pub(crate) fn compress_text(input: &str, max_chars: usize) -> CompressionResult 
 }
 
 pub fn run_compress(max_chars: usize, source: Option<&str>) {
-    let mut input = String::new();
-    if let Err(e) = std::io::stdin().read_to_string(&mut input) {
-        eprintln!("[ai-summary] Failed to read stdin: {e}");
-        std::process::exit(1);
-    }
+    let bytes = crate::read_limit(std::io::stdin().lock(), crate::subprocess::CONTENT_LIMIT)
+        .unwrap_or_else(|error| crate::commands::fail(1, &error));
+    let input =
+        String::from_utf8(bytes).unwrap_or_else(|_| crate::commands::fail(1, "stdin is not UTF-8"));
     let input = input.trim();
     if input.is_empty() {
         std::process::exit(1);
@@ -124,11 +121,7 @@ pub fn run_compress(max_chars: usize, source: Option<&str>) {
         compression
     );
 
-    record_compress(
-        source.unwrap_or("compress"),
-        raw_len as u64,
-        out_len as u64,
-    );
+    record_compress(source.unwrap_or("compress"), raw_len as u64, out_len as u64);
 
     print!("{}", result.text);
 }

@@ -1,15 +1,17 @@
 // History handling for stats persistence and aggregation helpers.
-// Exports: StatsStore, HistoryEntry, PeriodMetrics, stats_path(), load_stats(), save_stats().
+// Exports: StatsStore, HistoryEntry, PeriodMetrics, load_stats(), update_stats(), reset_stats().
 // Deps: crate::config::dirs_home, serde::{Deserialize, Serialize}, serde_json, std::fs.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
+use std::{fs, io::ErrorKind};
 
 use crate::config::dirs_home;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct StatsStore {
+    #[serde(default)]
+    pub schema_version: u32,
     pub total_searches: u64,
     pub total_pages_fetched: u64,
     pub total_raw_chars: u64,
@@ -63,25 +65,62 @@ impl PeriodMetrics {
     }
 }
 
-pub fn stats_path() -> PathBuf {
+const SCHEMA_VERSION: u32 = 1;
+const RETAINED_HISTORY: usize = 500;
+
+fn stats_path() -> PathBuf {
     dirs_home().join(".ai-summary/stats.json")
 }
 
-pub fn load_stats() -> StatsStore {
-    stats_path()
-        .exists()
-        .then(|| fs::read_to_string(stats_path()).ok())
-        .flatten()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+pub fn load_stats() -> Result<StatsStore, String> {
+    let data = match fs::read(stats_path()) {
+        Ok(data) => data,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(StatsStore {
+                schema_version: SCHEMA_VERSION,
+                ..StatsStore::default()
+            });
+        }
+        Err(error) => return Err(format!("cannot read statistics: {error}")),
+    };
+    let mut stats: StatsStore = serde_json::from_slice(&data)
+        .map_err(|_| "statistics file is invalid; existing data was kept")?;
+    if stats.schema_version > SCHEMA_VERSION {
+        return Err("unsupported statistics schema; existing data was kept".into());
+    }
+    stats.schema_version = SCHEMA_VERSION;
+    Ok(stats)
 }
 
-pub fn save_stats(stats: &StatsStore) {
-    let path = stats_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+pub fn update_stats(update: impl FnOnce(&mut StatsStore)) {
+    if let Err(error) = update_locked(update) {
+        eprintln!("[ai-summary] {error}");
     }
-    if let Ok(json) = serde_json::to_string_pretty(stats) {
-        let _ = fs::write(&path, json);
+}
+
+fn update_locked(update: impl FnOnce(&mut StatsStore)) -> Result<(), String> {
+    let path = stats_path();
+    let _lock = crate::storage::lock(&path.with_extension("lock"))
+        .map_err(|error| format!("cannot lock statistics: {error}"))?;
+    let mut stats = load_stats()?;
+    update(&mut stats);
+    if stats.history.len() > RETAINED_HISTORY {
+        stats
+            .history
+            .drain(..stats.history.len() - RETAINED_HISTORY);
+    }
+    let bytes = serde_json::to_vec_pretty(&stats).map_err(|_| "cannot encode statistics")?;
+    crate::storage::write_atomic(&path, &bytes, 0o600)
+        .map_err(|error| format!("cannot save statistics: {error}"))
+}
+
+pub fn reset_stats() -> Result<(), String> {
+    let path = stats_path();
+    let _lock = crate::storage::lock(&path.with_extension("lock"))
+        .map_err(|error| format!("cannot lock statistics: {error}"))?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot reset statistics: {error}")),
     }
 }

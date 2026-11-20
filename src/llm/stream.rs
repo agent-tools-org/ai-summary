@@ -1,135 +1,95 @@
-//! Streaming response parser for OpenAI-compatible chat completions.
-//! Exports: parse_streaming_response().
-//! Deps: reqwest blocking response, Usage type, cleanup and HTTP footer helpers.
+//! Decode SSE frames into an accumulated summary.
+//! Requires provider completion evidence before reporting success.
 
-use std::io::{BufRead, BufReader, Write};
-
-use crate::types::{SummarizeResult, Usage};
+use crate::types::Usage;
+use serde_json::Value;
+use std::io::{BufRead, BufReader, Read};
 
 pub(super) fn parse_streaming_response(
-    resp: reqwest::blocking::Response,
-    raw_chars: u64,
-    model_display: &str,
-    cost_label: &str,
-) -> SummarizeResult {
-    let mut reader = BufReader::new(resp);
-    let out = std::io::stdout();
-    let mut out = out.lock();
-    let mut text_parts = Vec::new();
-    let mut usage = None;
-    let mut line = String::new();
-    while read_stream_line(&mut reader, &mut line, &mut text_parts, &mut usage, &mut out) {}
-    finalize_stream(text_parts, usage, raw_chars, model_display, cost_label, out)
+    reader: impl Read,
+) -> Result<(String, Option<Usage>), String> {
+    let mut state = StreamState::default();
+    let mut data = String::new();
+    for line in BufReader::new(reader).lines() {
+        let line = line.map_err(|_| "failed to read summary stream")?;
+        if line.is_empty() {
+            if state.consume(&data)? {
+                return Ok((state.text, state.usage));
+            }
+            data.clear();
+        } else if let Some(field) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(field.strip_prefix(' ').unwrap_or(field));
+        }
+    }
+    if !state.finished || !data.is_empty() {
+        return Err("summary stream ended before completion".into());
+    }
+    Ok((state.text, state.usage))
 }
 
-fn read_stream_line<W: Write>(
-    reader: &mut BufReader<reqwest::blocking::Response>,
-    line: &mut String,
-    text_parts: &mut Vec<String>,
-    usage: &mut Option<Usage>,
-    out: &mut W,
-) -> bool {
-    line.clear();
-    let Ok(bytes) = reader.read_line(line) else {
-        return false;
-    };
-    if bytes == 0 {
-        return false;
-    }
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    parse_stream_payload(trimmed, text_parts, usage, out)
-}
-
-fn parse_stream_payload<W: Write>(
-    trimmed: &str,
-    text_parts: &mut Vec<String>,
-    usage: &mut Option<Usage>,
-    out: &mut W,
-) -> bool {
-    let Some(payload_line) = trimmed.strip_prefix("data: ") else {
-        return true;
-    };
-    if payload_line == "[DONE]" {
-        return false;
-    }
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(payload_line) else {
-        return true;
-    };
-    if let Some(text) = stream_text(&json) {
-        text_parts.push(text.to_string());
-        write!(out, "{text}").ok();
-        out.flush().ok();
-    }
-    if usage.is_none() {
-        *usage = parse_usage(&json);
-    }
-    true
-}
-
-fn stream_text(json: &serde_json::Value) -> Option<&str> {
-    let choice = json
-        .get("choices")
-        .and_then(|value| value.as_array())
-        .and_then(|choices| choices.first())?;
-    choice
-        .get("delta")
-        .and_then(|delta| delta.get("content"))
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(|value| value.as_str())
-        })
-}
-
-fn parse_usage(json: &serde_json::Value) -> Option<Usage> {
-    let usage_val = json.get("usage")?;
-    Some(Usage {
-        prompt_tokens: usage_val.get("prompt_tokens")?.as_u64()? as u32,
-        completion_tokens: usage_val.get("completion_tokens")?.as_u64()? as u32,
-    })
-}
-
-fn finalize_stream<W: Write>(
-    text_parts: Vec<String>,
+#[derive(Default)]
+struct StreamState {
+    text: String,
     usage: Option<Usage>,
-    raw_chars: u64,
-    model_display: &str,
-    cost_label: &str,
-    mut out: W,
-) -> SummarizeResult {
-    let response = text_parts.join("");
-    if response.is_empty() {
-        return empty_summary(raw_chars, usage);
-    }
-    let content = super::clean::strip_thinking(&response);
-    let summary_chars = content.len() as u64;
-    let footer = super::http::summary_footer(
-        model_display,
-        cost_label,
-        raw_chars,
-        summary_chars,
-        usage.as_ref(),
-    );
-    write!(out, "{footer}").ok();
-    out.flush().ok();
-    SummarizeResult {
-        summary_chars,
-        text: String::new(),
-        usage,
-        raw_chars,
+    finished: bool,
+}
+
+impl StreamState {
+    fn consume(&mut self, data: &str) -> Result<bool, String> {
+        if data.is_empty() {
+            return Ok(false);
+        }
+        if data == "[DONE]" {
+            return Ok(true);
+        }
+        let event: Value =
+            serde_json::from_str(data).map_err(|_| "invalid summary stream frame")?;
+        if !event["error"].is_null() {
+            return Err(format!("summary stream error: {}", event["error"]));
+        }
+        let choice = &event["choices"][0];
+        if let Some(text) = choice["delta"]["content"]
+            .as_str()
+            .or(choice["message"]["content"].as_str())
+        {
+            self.text.push_str(text);
+        }
+        match choice["finish_reason"].as_str() {
+            Some("stop") => self.finished = true,
+            Some(reason) => return Err(format!("summary stopped with reason {reason}")),
+            None => {}
+        }
+        if !event["usage"].is_null() {
+            self.usage = serde_json::from_value(event["usage"].clone()).ok();
+        }
+        Ok(false)
     }
 }
 
-fn empty_summary(raw_chars: u64, usage: Option<Usage>) -> SummarizeResult {
-    SummarizeResult {
-        text: String::new(),
-        usage,
-        raw_chars,
-        summary_chars: 0,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collects_multiline_frames_and_usage_after_finish() {
+        let input = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\r\n\r\n",
+            "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"usage\":\n",
+            "data: {\"prompt_tokens\":7,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (text, usage) = parse_streaming_response(input.as_bytes()).unwrap();
+        assert_eq!(text, "answer");
+        assert_eq!(usage.unwrap().prompt_tokens, 7);
+    }
+
+    #[test]
+    fn rejects_eof_after_an_unfinished_summary() {
+        let input = b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n";
+        assert!(parse_streaming_response(input.as_slice()).is_err());
     }
 }

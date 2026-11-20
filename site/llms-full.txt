@@ -95,7 +95,6 @@ ai-summary config
 - `--json` — Structured JSON output for scripting
 - `--metadata` — Add source URLs, timestamps, cache status, model to JSON output
 - `--no-cache` — Bypass summary cache (force fresh LLM call)
-- `--doc` — Doc-aware mode (reserved for future)
 - `--browser` — Use agent-browser for JS-heavy pages
 - `--cf` — Use Cloudflare Browser Rendering
 - `--api-url` — Override LLM API endpoint
@@ -144,7 +143,7 @@ Installs three things:
 Supported test commands: cargo test, cargo nextest, npm test, npx vitest, npx jest, yarn test, pytest, go test, mix test, dotnet test, make test. Commands with pipes or redirections are skipped.
 
 ### Tee mode
-When a wrapped command fails, full raw output is saved to `/tmp/ai-summary-tee/` so the AI can read it if the summary isn't enough. Auto-cleanup keeps only the 20 most recent tee files.
+When a wrapped command fails, up to 1 MiB of output is saved to `~/.ai-summary/tee/` so the AI can read it if the summary isn't enough. Auto-cleanup keeps only the 20 most recent tee files.
 
 Requires `jq` and `ai-summary` in PATH.
 
